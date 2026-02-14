@@ -9,6 +9,9 @@
 //! - Key serialization and deserialization
 //! - Multi-device support with device subkeys
 //! - Trust chain and device revocation
+//! - Trust management and fingerprint verification (TOFU model)
+
+pub mod trust;
 
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use rand::rngs::OsRng;

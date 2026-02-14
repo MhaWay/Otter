@@ -267,7 +267,7 @@ async fn handle_network_event(
                     }
                     
                     Message::Encrypted { ref from_peer_id, .. } => {
-                        let handler = message_handler.lock().await;
+                        let mut handler = message_handler.lock().await;
                         match handler.decrypt_message(&message) {
                             Ok(content) => {
                                 println!("\n🔐 Encrypted message from {}: {}", from_peer_id, content);
@@ -348,10 +348,10 @@ async fn send_message(
             .with_prompt("Message")
             .interact_text()?;
         
-        let handler = message_handler.lock().await;
+        let mut handler = message_handler.lock().await;
         
         let encrypted_msg = handler.prepare_encrypted_message(peer_id_str, &message)?;
-        let data = encrypted_msg.to_bytes()?;
+        let _data = encrypted_msg.to_bytes()?;
         
         // For now, we'll send via gossipsub broadcast
         // In a production system, you'd want direct peer-to-peer messaging

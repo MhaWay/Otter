@@ -158,13 +158,13 @@ impl MessageHandler {
     
     /// Encrypt and prepare a text message for a specific peer
     pub fn prepare_encrypted_message(
-        &self,
+        &mut self,
         peer_id: &str,
         text: &str,
     ) -> Result<Message, MessagingError> {
         let session = self
             .sessions
-            .get(peer_id)
+            .get_mut(peer_id)
             .ok_or_else(|| MessagingError::PeerNotFound(peer_id.to_string()))?;
         
         let encrypted = MessageCrypto::encrypt_text(session, text)
@@ -177,7 +177,7 @@ impl MessageHandler {
     }
     
     /// Decrypt a received encrypted message
-    pub fn decrypt_message(&self, message: &Message) -> Result<String, MessagingError> {
+    pub fn decrypt_message(&mut self, message: &Message) -> Result<String, MessagingError> {
         match message {
             Message::Encrypted {
                 from_peer_id,
@@ -186,7 +186,7 @@ impl MessageHandler {
             } => {
                 let session = self
                     .sessions
-                    .get(from_peer_id)
+                    .get_mut(from_peer_id)
                     .ok_or_else(|| MessagingError::PeerNotFound(from_peer_id.to_string()))?;
                 
                 MessageCrypto::decrypt_text(session, encrypted)
