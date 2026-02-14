@@ -17,15 +17,20 @@ Otter is designed as a modular system with clear separation of concerns. Each la
 │  Message Types, Routing, Conversations  │
 └─────────────────────────────────────────┘
                     ↓
+┌─────────────────────────────────────────┐
+│      otter-protocol (Versioning)        │
+│  Capability Negotiation, Handshake      │
+└─────────────────────────────────────────┘
+                    ↓
 ┌──────────────────────┬──────────────────┐
 │   otter-network      │  otter-crypto    │
-│  P2P Networking      │  Encryption      │
+│  P2P + WebRTC/ICE    │  Encryption      │
 │  Peer Discovery      │  Key Exchange    │
 └──────────────────────┴──────────────────┘
                     ↓
 ┌─────────────────────────────────────────┐
-│         otter-identity (Core)           │
-│     Keypairs, Peer ID, Signatures       │
+│    otter-identity (Core + Devices)      │
+│  Keypairs, Peer ID, Multi-Device        │
 └─────────────────────────────────────────┘
 ```
 
@@ -39,6 +44,8 @@ Otter is designed as a modular system with clear separation of concerns. Each la
 - `Identity`: Complete identity with private keys
 - `PublicIdentity`: Shareable public identity
 - `PeerId`: Unique identifier derived from public key
+- **`RootIdentity`**: Multi-device support with device subkeys
+- **`DeviceKey`**: Device-specific keys signed by root
 
 **Cryptography**:
 - **Ed25519**: For signing and identity
@@ -48,11 +55,28 @@ Otter is designed as a modular system with clear separation of concerns. Each la
   - Separate from signing keys (security best practice)
   - Used in Diffie-Hellman key agreement
 
+**Multi-Device Model**:
+```rust
+RootIdentity {
+    root: Identity,              // User's root identity
+    devices: Vec<DeviceKey>,     // Signed device subkeys
+}
+
+DeviceKey {
+    device_id: DeviceId,
+    device_verifying_key: Vec<u8>,
+    device_encryption_key: Vec<u8>,
+    revoked: bool,
+    root_signature: Vec<u8>,     // Signed by root
+}
+```
+
 **Design Decisions**:
 - Separate signing and encryption keys following cryptographic best practices
 - PeerId derived from public key for verifiable identity
 - JSON serialization for easy key backup
-- No password protection (could be added later)
+- Multi-device support allows one user identity across multiple devices
+- Device revocation enables compromised device isolation
 
 ### Crypto Layer (otter-crypto)
 
@@ -92,7 +116,14 @@ Otter is designed as a modular system with clear separation of concerns. Each la
 - **Kademlia DHT**: For distributed peer discovery and routing
 - **Identify**: For peer information exchange
 - **Noise**: For secure transport encryption
-- **Yamux/Mplex**: For stream multiplexing
+- **Yamux**: For stream multiplexing
+
+**WebRTC/ICE Module**:
+- **ICE Negotiation**: For NAT traversal
+- **STUN Support**: Discover public IP addresses
+- **TURN Support**: Relay for difficult NAT scenarios
+- **Candidate Types**: Host, server reflexive, relay
+- **Priority Calculation**: RFC 5245 compliant
 
 **Design Decisions**:
 - Gossipsub for broadcasting (simple, efficient for small networks)
@@ -100,6 +131,30 @@ Otter is designed as a modular system with clear separation of concerns. Each la
 - Kademlia for Internet-scale discovery
 - Event-driven architecture with channels for loose coupling
 - Separate transport encryption (Noise) from message encryption (E2E)
+- **WebRTC/ICE foundation enables future voice/video support**
+
+### Protocol Layer (otter-protocol)
+
+**Purpose**: Protocol versioning and capability negotiation.
+
+**Key Components**:
+- `Handshake`: Protocol handshake with version and capabilities
+- `Capability`: Enumeration of supported features
+- `ProtocolMessage`: Versioned message wrapper
+- `CapabilityMatcher`: Find common capabilities between peers
+
+**Protocol Features**:
+- Version negotiation (current: v1)
+- Capability discovery (text, voice, video, file transfer, etc.)
+- Mandatory E2E encryption check
+- Protocol upgrade path
+- Handshake signature verification
+
+**Design Decisions**:
+- Protocol layer prevents breaking changes in future versions
+- Capability negotiation enables gradual feature rollout
+- E2E encryption is mandatory, enforced at protocol level
+- Extensible capability system for future features
 
 ### Messaging Layer (otter-messaging)
 

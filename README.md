@@ -17,7 +17,7 @@ Otter is a peer-to-peer chat platform that prioritizes privacy, security, and de
 
 ## Architecture
 
-Otter is built as a Rust workspace with five core crates:
+Otter is built as a Rust workspace with six core crates:
 
 ### Core Crates
 
@@ -26,6 +26,8 @@ Otter is built as a Rust workspace with five core crates:
    - X25519 keypairs for encryption key exchange
    - Peer ID generation and verification
    - Key serialization and persistence
+   - **Multi-device support** with root identity and device subkeys
+   - Device revocation and trust chains
 
 2. **otter-crypto** - End-to-end encryption primitives
    - X25519 Diffie-Hellman key exchange
@@ -33,20 +35,28 @@ Otter is built as a Rust workspace with five core crates:
    - Secure session management
    - Message encryption/decryption
 
-3. **otter-network** - Peer-to-peer networking layer
+3. **otter-protocol** - Protocol versioning and capability negotiation
+   - Protocol version negotiation
+   - Capability discovery (voice, video, file transfer, etc.)
+   - Handshake protocol
+   - Protocol upgrade mechanisms
+   - Ensures E2E encryption is mandatory
+
+4. **otter-network** - Peer-to-peer networking layer
    - libp2p-based networking stack
    - mDNS for local peer discovery
    - Kademlia DHT for distributed peer discovery
    - Gossipsub for message propagation
    - Connection management
+   - **WebRTC/ICE** negotiation for NAT traversal
 
-4. **otter-messaging** - High-level messaging protocol
+5. **otter-messaging** - High-level messaging protocol
    - Message types and serialization
    - Conversation management
    - Integration with crypto layer
    - Message routing
 
-5. **otter-cli** - Command-line peer client
+6. **otter-cli** - Command-line peer client
    - Interactive chat interface
    - Peer management
    - Identity management
@@ -207,15 +217,18 @@ Otter is designed to protect against:
 
 ## Future Enhancements
 
-- [ ] Perfect Forward Secrecy (PFS) with ephemeral keys
-- [ ] WebRTC integration for voice/video calls
-- [ ] File transfer support
-- [ ] Group chat functionality
-- [ ] Persistent message storage (encrypted)
-- [ ] Mobile app support
-- [ ] Bridge to other networks
-- [ ] Improved NAT traversal
-- [ ] Bandwidth optimization
+With the recently added protocol versioning, multi-device support, and WebRTC/ICE foundations, these features are now ready for implementation:
+
+- [ ] **Voice Calls** - WebRTC audio with ICE negotiation (foundation complete)
+- [ ] **Video Calls** - WebRTC video support (foundation complete)
+- [ ] **Perfect Forward Secrecy** - Ephemeral key exchange
+- [ ] **Group Chat** - Multi-party encrypted messaging (capability negotiation ready)
+- [ ] **File Transfer** - Encrypted file sharing (protocol extensibility ready)
+- [ ] **Key Rotation** - Device key rotation (multi-device model supports it)
+- [ ] **Persistent Storage** - Encrypted message history
+- [ ] **Mobile Apps** - iOS and Android clients
+- [ ] **Bridge Support** - Connect to other networks
+- [ ] **Improved NAT Traversal** - Enhanced STUN/TURN support
 
 ## Contributing
 
