@@ -7,6 +7,9 @@
 //! - Connection management
 //! - Custom chat protocol
 //! - Peer information and routing
+//! - WebRTC transport with ICE negotiation for NAT traversal
+
+pub mod webrtc;
 
 use futures::{prelude::*, select};
 use libp2p::{
