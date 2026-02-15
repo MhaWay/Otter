@@ -26,6 +26,7 @@ release-windows:
 	fi
 	@cp QUICKSTART.md dist/otter-windows/README.txt || echo "QUICKSTART.md not found"
 	@cp run_otter.bat dist/otter-windows/ || echo "run_otter.bat not found"
+	@cp config.toml.example dist/otter-windows/ || echo "config.toml.example not found"
 	@echo "✓ Windows release ready in dist/otter-windows/"
 
 # Build Linux release
@@ -36,6 +37,7 @@ release-linux:
 	@cp target/release/otter dist/otter-linux/
 	@cp QUICKSTART.md dist/otter-linux/README.md || echo "QUICKSTART.md not found"
 	@cp run_otter.sh dist/otter-linux/ || echo "run_otter.sh not found"
+	@cp config.toml.example dist/otter-linux/ || echo "config.toml.example not found"
 	@chmod +x dist/otter-linux/otter
 	@chmod +x dist/otter-linux/run_otter.sh || true
 	@echo "✓ Linux release ready in dist/otter-linux/"
@@ -48,6 +50,7 @@ release-macos:
 	@cp target/release/otter dist/otter-macos/
 	@cp QUICKSTART.md dist/otter-macos/README.md || echo "QUICKSTART.md not found"
 	@cp run_otter.sh dist/otter-macos/ || echo "run_otter.sh not found"
+	@cp config.toml.example dist/otter-macos/ || echo "config.toml.example not found"
 	@chmod +x dist/otter-macos/otter
 	@chmod +x dist/otter-macos/run_otter.sh || true
 	@echo "✓ macOS release ready in dist/otter-macos/"
