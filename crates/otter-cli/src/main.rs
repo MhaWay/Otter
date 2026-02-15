@@ -236,12 +236,11 @@ async fn run_simple_mode(nickname: Option<String>, port: Option<u16>, data_dir: 
     let msg_handler_sig = message_handler.clone();
     tokio::spawn(async move {
         while let Some((peer_id, signaling_msg)) = signaling_rx.recv().await {
-            // Serialize signaling message and send via encrypted messaging
+            // TODO: Implement actual message sending via encrypted channel
+            // Currently placeholder for WebRTC signaling implementation
             if let Ok(json) = serde_json::to_string(&signaling_msg) {
                 let _handler = msg_handler_sig.lock().await;
-                // Send as text message with special prefix
                 let _msg_content = format!("SIGNALING:{}", json);
-                // In real implementation, send via encrypted channel
                 info!("Sending signaling message to {}: {:?}", peer_id, signaling_msg);
             }
         }
@@ -374,12 +373,11 @@ async fn start_peer(identity_path: PathBuf, port: u16) -> Result<()> {
     let msg_handler_sig = message_handler.clone();
     tokio::spawn(async move {
         while let Some((peer_id, signaling_msg)) = signaling_rx.recv().await {
-            // Serialize signaling message and send via encrypted messaging
+            // TODO: Implement actual message sending via encrypted channel
+            // Currently placeholder for WebRTC signaling implementation
             if let Ok(json) = serde_json::to_string(&signaling_msg) {
                 let _handler = msg_handler_sig.lock().await;
-                // Send as text message with special prefix
                 let _msg_content = format!("SIGNALING:{}", json);
-                // In real implementation, send via encrypted channel
                 info!("Sending signaling message to {}: {:?}", peer_id, signaling_msg);
             }
         }
