@@ -6,6 +6,7 @@ members = [
     "crates/otter-network",
     "crates/otter-protocol",
     "crates/otter-messaging",
+    "crates/otter-storage",
     "crates/otter-cli",
 ]
 
@@ -71,6 +72,8 @@ base64 = "0.21"
 chrono = { version = "0.4", features = ["serde"] }
 void = "1.0"
 uuid = { version = "1.6", features = ["v4", "serde"] }
+async-trait = "0.1"
+tempfile = "3.8"
 
 [profile.release]
 opt-level = 3

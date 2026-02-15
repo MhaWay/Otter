@@ -286,6 +286,255 @@ impl CapabilityMatcher {
     }
 }
 
+/// WebRTC signaling messages for voice/video setup
+/// 
+/// These messages are transmitted over the encrypted messaging channel
+/// to establish WebRTC connections between peers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum SignalingMessage {
+    /// Offer to start a WebRTC session
+    Offer {
+        /// SDP (Session Description Protocol) offer
+        sdp: String,
+        /// Media type (audio, video, or both)
+        media_type: MediaType,
+        /// Session ID for tracking
+        session_id: String,
+    },
+    
+    /// Answer to a WebRTC offer
+    Answer {
+        /// SDP answer
+        sdp: String,
+        /// Session ID matching the offer
+        session_id: String,
+    },
+    
+    /// ICE candidate for NAT traversal
+    IceCandidate {
+        /// ICE candidate in SDP format
+        candidate: String,
+        /// SDP media line index
+        sdp_mid: Option<String>,
+        /// SDP line number
+        sdp_mline_index: Option<u32>,
+        /// Session ID
+        session_id: String,
+    },
+    
+    /// Signal that ICE candidate gathering is complete
+    IceComplete {
+        /// Session ID
+        session_id: String,
+    },
+    
+    /// Request to end the session
+    Hangup {
+        /// Session ID
+        session_id: String,
+        /// Reason for hangup
+        reason: Option<String>,
+    },
+    
+    /// Acknowledgment of received signaling message
+    Ack {
+        /// ID of the message being acknowledged
+        ack_message_id: String,
+    },
+    
+    /// Request retransmission of a message
+    Retransmit {
+        /// ID of the message to retransmit
+        message_id: String,
+    },
+}
+
+/// Media type for WebRTC sessions
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum MediaType {
+    /// Audio only
+    AudioOnly,
+    /// Video only  
+    VideoOnly,
+    /// Both audio and video
+    AudioVideo,
+    /// Screen sharing
+    ScreenShare,
+    /// Data channel only
+    DataOnly,
+}
+
+/// Signaling protocol message with reliability
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignalingProtocolMessage {
+    /// Unique message ID
+    pub message_id: String,
+    
+    /// Signaling payload
+    pub payload: SignalingMessage,
+    
+    /// Timestamp
+    pub timestamp: DateTime<Utc>,
+    
+    /// Sequence number for ordering
+    pub sequence: u64,
+    
+    /// Requires acknowledgment
+    pub requires_ack: bool,
+}
+
+impl SignalingProtocolMessage {
+    /// Create a new signaling message
+    pub fn new(payload: SignalingMessage, sequence: u64, requires_ack: bool) -> Self {
+        Self {
+            message_id: uuid::Uuid::new_v4().to_string(),
+            payload,
+            timestamp: Utc::now(),
+            sequence,
+            requires_ack,
+        }
+    }
+    
+    /// Serialize to JSON
+    pub fn to_json(&self) -> Result<String, ProtocolError> {
+        serde_json::to_string(self)
+            .map_err(|e| ProtocolError::SerializationError(e.to_string()))
+    }
+    
+    /// Deserialize from JSON
+    pub fn from_json(json: &str) -> Result<Self, ProtocolError> {
+        serde_json::from_str(json)
+            .map_err(|e| ProtocolError::SerializationError(e.to_string()))
+    }
+    
+    /// Serialize to bytes
+    pub fn to_bytes(&self) -> Result<Vec<u8>, ProtocolError> {
+        bincode::serialize(self)
+            .map_err(|e| ProtocolError::SerializationError(e.to_string()))
+    }
+    
+    /// Deserialize from bytes
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, ProtocolError> {
+        bincode::deserialize(bytes)
+            .map_err(|e| ProtocolError::SerializationError(e.to_string()))
+    }
+}
+
+/// Signaling session manager for tracking WebRTC setup
+pub struct SignalingSession {
+    /// Session ID
+    pub session_id: String,
+    
+    /// Peer ID we're signaling with
+    pub peer_id: String,
+    
+    /// Local media type
+    pub media_type: MediaType,
+    
+    /// Whether we initiated the session
+    pub is_initiator: bool,
+    
+    /// Sequence counter for messages
+    pub sequence: u64,
+    
+    /// Pending acks (message_id -> send_time)
+    pub pending_acks: HashMap<String, DateTime<Utc>>,
+    
+    /// Received ICE candidates
+    pub received_candidates: Vec<String>,
+    
+    /// Session start time
+    pub started_at: DateTime<Utc>,
+    
+    /// Session state
+    pub state: SignalingState,
+}
+
+/// Signaling session state
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SignalingState {
+    /// Waiting to send offer
+    Idle,
+    /// Offer sent, waiting for answer
+    OfferSent,
+    /// Offer received, sending answer
+    AnswerPending,
+    /// Answer sent or received, exchanging ICE
+    Connecting,
+    /// Session established
+    Connected,
+    /// Session ended
+    Closed,
+    /// Error state
+    Failed(String),
+}
+
+impl SignalingSession {
+    /// Create a new signaling session as initiator
+    pub fn new_initiator(session_id: String, peer_id: String, media_type: MediaType) -> Self {
+        Self {
+            session_id,
+            peer_id,
+            media_type,
+            is_initiator: true,
+            sequence: 0,
+            pending_acks: HashMap::new(),
+            received_candidates: Vec::new(),
+            started_at: Utc::now(),
+            state: SignalingState::Idle,
+        }
+    }
+    
+    /// Create a new signaling session as responder
+    pub fn new_responder(session_id: String, peer_id: String, media_type: MediaType) -> Self {
+        Self {
+            session_id,
+            peer_id,
+            media_type,
+            is_initiator: false,
+            sequence: 0,
+            pending_acks: HashMap::new(),
+            received_candidates: Vec::new(),
+            started_at: Utc::now(),
+            state: SignalingState::AnswerPending,
+        }
+    }
+    
+    /// Create the next signaling message
+    pub fn create_message(&mut self, payload: SignalingMessage, requires_ack: bool) -> SignalingProtocolMessage {
+        let msg = SignalingProtocolMessage::new(payload, self.sequence, requires_ack);
+        self.sequence += 1;
+        
+        if requires_ack {
+            self.pending_acks.insert(msg.message_id.clone(), msg.timestamp);
+        }
+        
+        msg
+    }
+    
+    /// Handle received acknowledgment
+    pub fn handle_ack(&mut self, message_id: &str) {
+        self.pending_acks.remove(message_id);
+    }
+    
+    /// Get messages that need retransmission (no ack after timeout)
+    pub fn get_retransmit_needed(&self, timeout_seconds: i64) -> Vec<String> {
+        let now = Utc::now();
+        self.pending_acks
+            .iter()
+            .filter(|(_, sent_at)| {
+                (now - **sent_at).num_seconds() > timeout_seconds
+            })
+            .map(|(msg_id, _)| msg_id.clone())
+            .collect()
+    }
+    
+    /// Update session state
+    pub fn set_state(&mut self, state: SignalingState) {
+        self.state = state;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -365,5 +614,62 @@ mod tests {
         
         assert_eq!(handshake.version, deserialized.version);
         assert_eq!(handshake.capabilities.len(), deserialized.capabilities.len());
+    }
+    
+    #[test]
+    fn test_signaling_session_creation() {
+        let session_id = "test-session".to_string();
+        let peer_id = "peer1".to_string();
+        
+        let session = SignalingSession::new_initiator(
+            session_id.clone(),
+            peer_id.clone(),
+            MediaType::AudioOnly,
+        );
+        
+        assert_eq!(session.session_id, session_id);
+        assert_eq!(session.peer_id, peer_id);
+        assert!(session.is_initiator);
+        assert_eq!(session.state, SignalingState::Idle);
+    }
+    
+    #[test]
+    fn test_signaling_message_serialization() {
+        let offer = SignalingMessage::Offer {
+            sdp: "test-sdp".to_string(),
+            media_type: MediaType::AudioVideo,
+            session_id: "session1".to_string(),
+        };
+        
+        let msg = SignalingProtocolMessage::new(offer, 0, true);
+        
+        // Test JSON serialization
+        let json = msg.to_json().unwrap();
+        let deserialized = SignalingProtocolMessage::from_json(&json).unwrap();
+        
+        assert_eq!(msg.message_id, deserialized.message_id);
+        assert_eq!(msg.sequence, deserialized.sequence);
+        assert!(deserialized.requires_ack);
+    }
+    
+    #[test]
+    fn test_signaling_ack_handling() {
+        let mut session = SignalingSession::new_initiator(
+            "session1".to_string(),
+            "peer1".to_string(),
+            MediaType::AudioOnly,
+        );
+        
+        let offer = SignalingMessage::Offer {
+            sdp: "test".to_string(),
+            media_type: MediaType::AudioOnly,
+            session_id: "session1".to_string(),
+        };
+        
+        let msg = session.create_message(offer, true);
+        assert_eq!(session.pending_acks.len(), 1);
+        
+        session.handle_ack(&msg.message_id);
+        assert_eq!(session.pending_acks.len(), 0);
     }
 }

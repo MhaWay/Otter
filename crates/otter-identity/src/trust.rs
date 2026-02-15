@@ -181,6 +181,7 @@ impl TrustRecord {
 }
 
 /// Trust store for managing peer trust
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TrustStore {
     records: HashMap<String, TrustRecord>,
 }
