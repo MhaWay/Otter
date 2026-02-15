@@ -487,11 +487,13 @@ async fn handle_network_event(
         NetworkEvent::PeerConnected { peer_id } => {
             info!("Connected to peer: {}", peer_id);
             println!("\n✓ Connected: {}", peer_id);
+        }
+        
+        NetworkEvent::PeerReadyForMessages { peer_id } => {
+            info!("Peer {} ready for messages (gossipsub subscribed)", peer_id);
+            println!("  → Peer ready, sending identity...");
             
-            // Wait briefly for gossipsub mesh to establish
-            tokio::time::sleep(Duration::from_millis(500)).await;
-            
-            // Auto-send our identity to new peer
+            // Auto-send our identity to new peer now that gossipsub is ready
             let handler = message_handler.lock().await;
             let identity_msg = Message::identity(handler.public_identity());
             drop(handler); // Release lock before sending

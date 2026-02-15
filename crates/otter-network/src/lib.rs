@@ -53,6 +53,8 @@ pub enum NetworkEvent {
     PeerConnected { peer_id: PeerId },
     /// A peer disconnected
     PeerDisconnected { peer_id: PeerId },
+    /// A peer subscribed to gossipsub and is ready for messages
+    PeerReadyForMessages { peer_id: PeerId },
     /// Received a message from a peer
     MessageReceived { from: PeerId, data: Vec<u8> },
     /// Network listening started
@@ -247,6 +249,21 @@ impl Network {
                     from: propagation_source,
                     data: message.data,
                 }).await;
+            }
+            
+            SwarmEvent::Behaviour(OtterBehaviourEvent::Gossipsub(
+                gossipsub::Event::Subscribed { peer_id, .. }
+            )) => {
+                info!("Peer {} subscribed to gossipsub topic", peer_id);
+                
+                // Notify that peer is ready for messages via gossipsub
+                let _ = self.event_tx.send(NetworkEvent::PeerReadyForMessages { peer_id }).await;
+            }
+            
+            SwarmEvent::Behaviour(OtterBehaviourEvent::Gossipsub(
+                gossipsub::Event::Unsubscribed { peer_id, .. }
+            )) => {
+                info!("Peer {} unsubscribed from gossipsub topic", peer_id);
             }
             
             SwarmEvent::ConnectionEstablished { peer_id, .. } => {
