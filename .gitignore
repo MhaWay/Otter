@@ -1,0 +1,31 @@
+# Rust
+target/
+Cargo.lock
+**/*.rs.bk
+*.pdb
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Identity files (don't commit private keys!)
+identity*.json
+*.key
+
+# Logs
+*.log
+
+# Build artifacts
+dist/
+build/
+
+# Test outputs
+test-output/
+
+# Temporary files
+/tmp/
+*.tmp
