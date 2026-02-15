@@ -231,6 +231,7 @@ async fn run_simple_mode(nickname: Option<String>, port: Option<u16>, data_dir: 
     // Clone for tasks
     let msg_handler = message_handler.clone();
     let voice_mgr = voice_manager.clone();
+    let cmd_tx_events = command_tx.clone();
     
     // Spawn signaling handler (sends signaling messages over encrypted channel)
     let msg_handler_sig = message_handler.clone();
@@ -249,7 +250,7 @@ async fn run_simple_mode(nickname: Option<String>, port: Option<u16>, data_dir: 
     // Spawn event handler
     let event_handle = tokio::spawn(async move {
         while let Some(event) = event_rx.recv().await {
-            if let Err(e) = handle_network_event(event, msg_handler.clone(), voice_mgr.clone()).await {
+            if let Err(e) = handle_network_event(event, msg_handler.clone(), voice_mgr.clone(), cmd_tx_events.clone()).await {
                 error!("Error handling event: {}", e);
             }
         }
@@ -368,6 +369,7 @@ async fn start_peer(identity_path: PathBuf, port: u16) -> Result<()> {
     // Clone for tasks
     let msg_handler = message_handler.clone();
     let voice_mgr = voice_manager.clone();
+    let cmd_tx_events = command_tx.clone();
     
     // Spawn signaling handler (sends signaling messages over encrypted channel)
     let msg_handler_sig = message_handler.clone();
@@ -386,7 +388,7 @@ async fn start_peer(identity_path: PathBuf, port: u16) -> Result<()> {
     // Spawn event handler
     let event_handle = tokio::spawn(async move {
         while let Some(event) = event_rx.recv().await {
-            if let Err(e) = handle_network_event(event, msg_handler.clone(), voice_mgr.clone()).await {
+            if let Err(e) = handle_network_event(event, msg_handler.clone(), voice_mgr.clone(), cmd_tx_events.clone()).await {
                 error!("Error handling event: {}", e);
             }
         }
@@ -458,6 +460,7 @@ async fn handle_network_event(
     event: NetworkEvent,
     message_handler: Arc<Mutex<MessageHandler>>,
     voice_manager: Arc<Mutex<VoiceManager>>,
+    command_tx: mpsc::Sender<NetworkCommand>,
 ) -> Result<()> {
     match event {
         NetworkEvent::PeerDiscovered { peer_id, addresses } => {
@@ -469,10 +472,31 @@ async fn handle_network_event(
             info!("Connected to peer: {}", peer_id);
             println!("\n✓ Connected: {}", peer_id);
             
-            // Send identity to new peer
+            // Auto-send our identity to new peer
             let handler = message_handler.lock().await;
-            let _identity_msg = Message::identity(handler.public_identity());
-            println!("  Exchanging identities...");
+            let identity_msg = Message::identity(handler.public_identity());
+            drop(handler); // Release lock before sending
+            
+            match identity_msg.to_bytes() {
+                Ok(data) => {
+                    // Send identity message via network
+                    if let Err(e) = command_tx
+                        .send(NetworkCommand::SendMessage {
+                            to: peer_id.clone(),
+                            data,
+                        })
+                        .await
+                    {
+                        error!("Failed to send identity to {}: {}", peer_id, e);
+                    } else {
+                        info!("Sent identity to peer: {}", peer_id);
+                        println!("  ✓ Identity sent");
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to serialize identity message: {}", e);
+                }
+            }
         }
         
         NetworkEvent::PeerDisconnected { peer_id } => {
