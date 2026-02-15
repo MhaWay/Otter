@@ -466,6 +466,22 @@ async fn handle_network_event(
         NetworkEvent::PeerDiscovered { peer_id, addresses } => {
             info!("Discovered peer: {} at {:?}", peer_id, addresses);
             println!("\n✓ Discovered peer: {}", peer_id);
+            
+            // Automatically dial the discovered peer
+            if let Some(address) = addresses.first() {
+                info!("Auto-dialing peer {} at {}", peer_id, address);
+                if let Err(e) = command_tx
+                    .send(NetworkCommand::DialPeer {
+                        peer_id: peer_id.clone(),
+                        address: address.clone(),
+                    })
+                    .await
+                {
+                    error!("Failed to dial peer {}: {}", peer_id, e);
+                } else {
+                    println!("  → Connecting...");
+                }
+            }
         }
         
         NetworkEvent::PeerConnected { peer_id } => {
