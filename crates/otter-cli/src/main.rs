@@ -487,6 +487,28 @@ async fn handle_network_event(
         NetworkEvent::PeerConnected { peer_id } => {
             info!("Connected to peer: {}", peer_id);
             println!("\n✓ Connected: {}", peer_id);
+            
+            // Send identity with a delay as fallback
+            // (in case PeerReadyForMessages doesn't fire)
+            let cmd_tx = command_tx.clone();
+            let msg_handler = message_handler.clone();
+            let peer = peer_id.clone();
+            tokio::spawn(async move {
+                // Wait for gossipsub to potentially be ready
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                
+                let handler = msg_handler.lock().await;
+                let identity_msg = Message::identity(handler.public_identity());
+                drop(handler);
+                
+                if let Ok(data) = identity_msg.to_bytes() {
+                    let _ = cmd_tx.send(NetworkCommand::SendMessage {
+                        to: peer,
+                        data,
+                    }).await;
+                    info!("Sent identity via fallback mechanism");
+                }
+            });
         }
         
         NetworkEvent::PeerReadyForMessages { peer_id } => {
