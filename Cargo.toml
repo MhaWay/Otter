@@ -7,6 +7,7 @@ members = [
     "crates/otter-protocol",
     "crates/otter-messaging",
     "crates/otter-storage",
+    "crates/otter-voice",
     "crates/otter-cli",
 ]
 

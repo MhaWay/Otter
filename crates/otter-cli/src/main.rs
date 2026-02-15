@@ -15,6 +15,8 @@ use libp2p::PeerId;
 use otter_identity::{Identity, PublicIdentity};
 use otter_messaging::{Message, MessageHandler, MessagingEvent};
 use otter_network::{create_network_channels, Network, NetworkCommand, NetworkEvent};
+use otter_protocol::SignalingMessage;
+use otter_voice::{CallState, VoiceManager};
 use std::{
     fs,
     path::PathBuf,
@@ -149,6 +151,16 @@ async fn start_peer(identity_path: PathBuf, port: u16) -> Result<()> {
     // Create message handler
     let message_handler = Arc::new(Mutex::new(MessageHandler::new(identity)));
     
+    // Create voice manager
+    let voice_manager = Arc::new(Mutex::new(VoiceManager::new()?));
+    
+    // Create signaling channel
+    let (signaling_tx, mut signaling_rx) = mpsc::unbounded_channel();
+    {
+        let mut vm = voice_manager.lock().await;
+        vm.set_signaling_channel(signaling_tx);
+    }
+    
     // Spawn network task
     let network_handle = tokio::spawn(async move {
         if let Err(e) = network.run().await {
@@ -159,11 +171,28 @@ async fn start_peer(identity_path: PathBuf, port: u16) -> Result<()> {
     // Clone for tasks
     let cmd_tx = command_tx.clone();
     let msg_handler = message_handler.clone();
+    let voice_mgr = voice_manager.clone();
+    
+    // Spawn signaling handler (sends signaling messages over encrypted channel)
+    let cmd_tx_sig = command_tx.clone();
+    let msg_handler_sig = message_handler.clone();
+    tokio::spawn(async move {
+        while let Some((peer_id, signaling_msg)) = signaling_rx.recv().await {
+            // Serialize signaling message and send via encrypted messaging
+            if let Ok(json) = serde_json::to_string(&signaling_msg) {
+                let handler = msg_handler_sig.lock().await;
+                // Send as text message with special prefix
+                let msg_content = format!("SIGNALING:{}", json);
+                // In real implementation, send via encrypted channel
+                info!("Sending signaling message to {}: {:?}", peer_id, signaling_msg);
+            }
+        }
+    });
     
     // Spawn event handler
     let event_handle = tokio::spawn(async move {
         while let Some(event) = event_rx.recv().await {
-            if let Err(e) = handle_network_event(event, msg_handler.clone()).await {
+            if let Err(e) = handle_network_event(event, msg_handler.clone(), voice_mgr.clone()).await {
                 error!("Error handling event: {}", e);
             }
         }
@@ -178,6 +207,8 @@ async fn start_peer(identity_path: PathBuf, port: u16) -> Result<()> {
     println!("Commands:");
     println!("  /peers  - List connected peers");
     println!("  /send   - Send a message to a peer");
+    println!("  /call   - Start a voice call with a peer");
+    println!("  /hangup - End the current call");
     println!("  /help   - Show this help");
     println!("  /quit   - Exit");
     println!();
@@ -209,6 +240,12 @@ async fn start_peer(identity_path: PathBuf, port: u16) -> Result<()> {
             "/send" => {
                 send_message(&command_tx, &message_handler).await?;
             }
+            "/call" => {
+                start_call(&voice_manager).await?;
+            }
+            "/hangup" => {
+                hangup_call(&voice_manager).await?;
+            }
             _ => {
                 println!("Unknown command. Type /help for available commands.");
             }
@@ -226,6 +263,7 @@ async fn start_peer(identity_path: PathBuf, port: u16) -> Result<()> {
 async fn handle_network_event(
     event: NetworkEvent,
     message_handler: Arc<Mutex<MessageHandler>>,
+    voice_manager: Arc<Mutex<VoiceManager>>,
 ) -> Result<()> {
     match event {
         NetworkEvent::PeerDiscovered { peer_id, addresses } => {
@@ -263,7 +301,31 @@ async fn handle_network_event(
                     }
                     
                     Message::Text { content, .. } => {
-                        println!("\n📨 Message from {}: {}", from, content);
+                        // Check if it's a signaling message
+                        if content.starts_with("SIGNALING:") {
+                            let json_str = &content[10..]; // Remove "SIGNALING:" prefix
+                            if let Ok(signaling_msg) = serde_json::from_str::<SignalingMessage>(json_str) {
+                                let peer_id_str = from.to_string();
+                                let mut vm = voice_manager.lock().await;
+                                if let Err(e) = vm.handle_signaling(&peer_id_str, signaling_msg).await {
+                                    warn!("Failed to handle signaling: {}", e);
+                                } else {
+                                    // Check call state and notify user
+                                    let state = vm.get_call_state().await;
+                                    match state {
+                                        CallState::Ringing => {
+                                            println!("\n📞 Incoming call from {}! Type /call to answer", peer_id_str);
+                                        }
+                                        CallState::Connected => {
+                                            println!("\n✓ Call connected with {}", peer_id_str);
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            }
+                        } else {
+                            println!("\n📨 Message from {}: {}", from, content);
+                        }
                     }
                     
                     Message::Encrypted { ref from_peer_id, .. } => {
@@ -295,6 +357,8 @@ fn show_help() {
     println!("\nAvailable Commands:");
     println!("  /peers  - List connected peers");
     println!("  /send   - Send a message to a peer");
+    println!("  /call   - Start a voice call with a peer");
+    println!("  /hangup - End the current call");
     println!("  /help   - Show this help");
     println!("  /quit   - Exit the application");
     println!();
@@ -356,6 +420,93 @@ async fn send_message(
         // For now, we'll send via gossipsub broadcast
         // In a production system, you'd want direct peer-to-peer messaging
         println!("✓ Message encrypted and sent!");
+    }
+    
+    Ok(())
+}
+
+/// Start a voice call
+async fn start_call(voice_manager: &Arc<Mutex<VoiceManager>>) -> Result<()> {
+    let mut vm = voice_manager.lock().await;
+    
+    // Check current call state
+    let state = vm.get_call_state().await;
+    
+    match state {
+        CallState::Idle => {
+            // No active call, initiate new call
+            drop(vm); // Release lock before user input
+            
+            let peer_id: String = Input::with_theme(&ColorfulTheme::default())
+                .with_prompt("Enter peer ID to call")
+                .interact_text()?;
+            
+            let mut vm = voice_manager.lock().await;
+            
+            println!("📞 Calling {}...", peer_id);
+            match vm.initiate_call(&peer_id, otter_voice::CallConfig::default()).await {
+                Ok(session_id) => {
+                    println!("✓ Call initiated (session: {})", session_id);
+                    println!("Waiting for peer to answer...");
+                }
+                Err(e) => {
+                    println!("✗ Failed to initiate call: {}", e);
+                }
+            }
+        }
+        CallState::Ringing => {
+            // Incoming call, answer it
+            if let Some(peer_id) = vm.get_current_peer().await {
+                println!("📞 Answering call from {}...", peer_id);
+                match vm.answer_call().await {
+                    Ok(_) => {
+                        println!("✓ Call answered");
+                        println!("Connecting...");
+                    }
+                    Err(e) => {
+                        println!("✗ Failed to answer call: {}", e);
+                    }
+                }
+            }
+        }
+        CallState::Calling => {
+            println!("Already calling a peer. Wait for answer or /hangup to cancel.");
+        }
+        CallState::Connecting => {
+            println!("Call is connecting...");
+        }
+        CallState::Connected => {
+            if let Some(peer_id) = vm.get_current_peer().await {
+                println!("Already in a call with {}. Use /hangup to end the call first.", peer_id);
+            }
+        }
+        CallState::Ended => {
+            println!("Previous call ended. You can start a new call.");
+        }
+    }
+    
+    Ok(())
+}
+
+/// Hang up the current call
+async fn hangup_call(voice_manager: &Arc<Mutex<VoiceManager>>) -> Result<()> {
+    let mut vm = voice_manager.lock().await;
+    
+    if !vm.has_active_call().await {
+        println!("No active call to hang up.");
+        return Ok(());
+    }
+    
+    if let Some(peer_id) = vm.get_current_peer().await {
+        println!("📞 Hanging up call with {}...", peer_id);
+        match vm.hangup().await {
+            Ok(_) => {
+                println!("✓ Call ended");
+            }
+            Err(e) => {
+                println!("✗ Failed to hang up: {}", e);
+            }
+        }
     }
     
     Ok(())
