@@ -549,7 +549,8 @@ async fn handle_network_event(
         
         NetworkEvent::MessageReceived { from, data } => {
             debug!("Received {} bytes from {}", data.len(), from);
-            debug!("First 16 bytes: {:?}", &data[..data.len().min(16)]);
+            debug!("First 32 bytes as hex: {}", hex::encode(&data[..data.len().min(32)]));
+            debug!("Enum tag (first byte): {}", data[0]);
             match Message::from_bytes(&data) {
                 Ok(message) => {
                     match message {
@@ -686,7 +687,9 @@ async fn send_message(
         let encrypted_msg = handler.prepare_encrypted_message(peer_id_str, &message)?;
         debug!("Prepared encrypted message: {:?}", encrypted_msg);
         let data = encrypted_msg.to_bytes()?;
-        debug!("Serialized to {} bytes, first 16: {:?}", data.len(), &data[..data.len().min(16)]);
+        debug!("Serialized to {} bytes", data.len());
+        debug!("First 32 bytes as hex: {}", hex::encode(&data[..data.len().min(32)]));
+        debug!("Enum tag (first byte): {}", data[0]);
         
         drop(handler); // Release lock before sending
         
