@@ -42,16 +42,41 @@ Otter/
 │   ├── otter-identity/     # Identity & key management
 │   ├── otter-crypto/       # Encryption primitives
 │   ├── otter-network/      # P2P networking
+│   ├── otter-protocol/     # Protocol versioning
 │   ├── otter-messaging/    # Message protocol
+│   ├── otter-storage/      # Data persistence
+│   ├── otter-voice/        # Voice communication
 │   └── otter-cli/          # CLI client
 ├── Cargo.toml              # Workspace configuration
 ├── README.md               # Project overview
-├── ARCHITECTURE.md         # Architecture documentation
-├── USAGE.md                # Usage examples
+├── LICENSE.md              # Project license
 └── CONTRIBUTING.md         # This file
 ```
 
 ## How to Contribute
+
+### Accepting the CLA
+
+**Before your first contribution**, you must sign the Contributor License Agreement (CLA):
+
+1. Read the [CLA document](CLA.md)
+2. Add this statement to your first pull request:
+   ```
+   I hereby accept the terms of the Otter CLA.
+   
+   Signed: [Your Full Name]
+   Date: [YYYY-MM-DD]
+   GitHub Username: @[your-username]
+   Email: [your-email]
+   ```
+
+**Why?** The CLA ensures:
+- The project owner can license your contributions under any terms
+- You retain copyright but grant necessary rights
+- The project can evolve without legal complications
+- Commercial development is possible while keeping the codebase secure
+
+### Contribution Guidelines
 
 ### Reporting Bugs
 
@@ -91,14 +116,17 @@ Feature requests are welcome! Please include:
 
 ### Pull Requests
 
-1. **Create an issue first** for significant changes
-2. **Fork the repository** and create a feature branch
-3. **Make focused commits** with clear messages
-4. **Add tests** for new functionality
-5. **Update documentation** as needed
-6. **Ensure all tests pass** before submitting
-7. **Follow the code style** (run `cargo fmt`)
-8. **Run clippy** for linting (`cargo clippy`)
+1. **Sign the CLA** (required for first contribution)
+2. **Create an issue first** for significant changes
+3. **Fork the repository** and create a feature branch
+4. **Make focused commits** with clear messages
+5. **Add tests** for new functionality
+6. **Update documentation** as needed
+7. **Ensure all tests pass** before submitting
+8. **Follow the code style** (run `cargo fmt`)
+9. **Run clippy** for linting (`cargo clippy`)
+
+**Note**: The project owner reserves the right to accept, modify, or reject any contribution. All accepted contributions become part of the official codebase under the project's proprietary license.
 
 Example workflow:
 ```bash
@@ -285,10 +313,10 @@ RUST_LOG=otter=debug,libp2p=debug cargo run -p otter-cli -- start
 Run multiple peers:
 ```bash
 # Terminal 1
-cargo run -p otter-cli -- start -i test1.json -p 9001
+.\target\release\otter.exe --nickname Alice
 
-# Terminal 2
-cargo run -p otter-cli -- start -i test2.json -p 9002
+# Terminal 2  
+.\target\release\otter.exe --nickname Bob --port 9001
 ```
 
 ### Benchmarking
@@ -328,17 +356,24 @@ Expect:
 
 ## License
 
-By contributing, you agree that your contributions will be licensed under the same terms as the project (MIT OR Apache-2.0).
+By contributing to Otter, you agree to the terms of the [Contributor License Agreement](CLA.md).
+
+Your contributions will be incorporated into the project under the proprietary license, 
+but you retain copyright to your original work. The project owner gains the right to 
+use, modify, and distribute your contributions under any license, including commercial licenses.
 
 ## Code of Conduct
 
 Be respectful, inclusive, and professional. We're all here to build something useful together.
 
+**Security First**: Never compromise on security or privacy. All contributions must maintain 
+the project's high standards for cryptographic implementation and user protection.
+
 ## Questions?
 
-If you have questions:
-1. Check existing documentation
-2. Search issues and discussions
-3. Open a new issue with your question
+For licensing questions, commercial inquiries, or permissions:
+- Email: info@ggally.net
+- Website: https://ggally.net
+- Open an issue for technical questions
 
 Thank you for contributing to Otter! 🦦
