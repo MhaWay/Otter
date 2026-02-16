@@ -27,7 +27,7 @@ use std::{
 };
 use thiserror::Error as ThisError;
 use tokio::sync::mpsc;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 use void::Void;
 
 #[derive(ThisError, Debug)]
@@ -266,6 +266,11 @@ impl Network {
                 info!("Peer {} unsubscribed from gossipsub topic", peer_id);
             }
             
+            SwarmEvent::Behaviour(OtterBehaviourEvent::Gossipsub(event)) => {
+                // Log any other gossipsub events (validation failures, etc.)
+                warn!("Unhandled gossipsub event: {:?}", event);
+            }
+            
             SwarmEvent::ConnectionEstablished { peer_id, .. } => {
                 info!("Connected to peer: {}", peer_id);
                 self.connected_peers.insert(peer_id);
@@ -297,14 +302,22 @@ impl Network {
     async fn handle_command(&mut self, command: NetworkCommand) -> Result<(), NetworkError> {
         match command {
             NetworkCommand::SendMessage { to, data } => {
-                debug!("Sending message to peer: {}", to);
+                debug!("Sending message to peer: {} (size: {} bytes)", to, data.len());
                 
                 // Publish to gossipsub topic
-                self.swarm
+                match self.swarm
                     .behaviour_mut()
                     .gossipsub
-                    .publish(self.gossipsub_topic.clone(), data)
-                    .map_err(|e| NetworkError::SendError(format!("Publish error: {}", e)))?;
+                    .publish(self.gossipsub_topic.clone(), data.clone())
+                {
+                    Ok(message_id) => {
+                        debug!("Published message to gossipsub, message_id: {:?}", message_id);
+                    }
+                    Err(e) => {
+                        error!("Failed to publish to gossipsub: {}", e);
+                        return Err(NetworkError::SendError(format!("Publish error: {}", e)));
+                    }
+                }
             }
             
             NetworkCommand::ListPeers { response } => {

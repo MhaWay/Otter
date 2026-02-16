@@ -19,7 +19,7 @@ use std::{
     time::Duration,
 };
 use tokio::sync::{mpsc, Mutex};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 use tracing_subscriber;
 
 #[derive(Parser)]
@@ -548,18 +548,21 @@ async fn handle_network_event(
         }
         
         NetworkEvent::MessageReceived { from, data } => {
-            if let Ok(message) = Message::from_bytes(&data) {
-                match message {
-                    Message::Identity { public_identity, .. } => {
-                        let peer_id = public_identity.peer_id().to_string();
-                        let mut handler = message_handler.lock().await;
-                        
-                        if let Err(e) = handler.register_peer(public_identity) {
-                            warn!("Failed to register peer: {}", e);
-                        } else {
-                            println!("\n✓ Identity verified for peer: {}", peer_id);
+            debug!("Received {} bytes from {}", data.len(), from);
+            match Message::from_bytes(&data) {
+                Ok(message) => {
+                    match message {
+                        Message::Identity { public_identity, .. } => {
+                            let peer_id = public_identity.peer_id().to_string();
+                            info!("Received identity from peer: {}", peer_id);
+                            let mut handler = message_handler.lock().await;
+                            
+                            if let Err(e) = handler.register_peer(public_identity) {
+                                warn!("Failed to register peer: {}", e);
+                            } else {
+                                println!("\n✓ Identity verified for peer: {}", peer_id);
+                            }
                         }
-                    }
                     
                     Message::Text { content, .. } => {
                         // Check if it's a signaling message
@@ -602,6 +605,10 @@ async fn handle_network_event(
                     }
                     
                     _ => {}
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to deserialize message from {}: {}", from, e);
                 }
             }
         }
