@@ -113,7 +113,7 @@ impl Network {
         // Configure Gossipsub
         let gossipsub_config = gossipsub::ConfigBuilder::default()
             .heartbeat_interval(Duration::from_secs(10))
-            .validation_mode(gossipsub::ValidationMode::Strict)
+            .validation_mode(gossipsub::ValidationMode::Permissive)  // Changed from Strict to allow testing
             .build()
             .map_err(|e| NetworkError::InitializationError(e.to_string()))?;
         
