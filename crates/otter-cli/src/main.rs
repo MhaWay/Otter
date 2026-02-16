@@ -549,6 +549,7 @@ async fn handle_network_event(
         
         NetworkEvent::MessageReceived { from, data } => {
             debug!("Received {} bytes from {}", data.len(), from);
+            debug!("First 16 bytes: {:?}", &data[..data.len().min(16)]);
             match Message::from_bytes(&data) {
                 Ok(message) => {
                     match message {
@@ -683,7 +684,9 @@ async fn send_message(
         let mut handler = message_handler.lock().await;
         
         let encrypted_msg = handler.prepare_encrypted_message(peer_id_str, &message)?;
+        debug!("Prepared encrypted message: {:?}", encrypted_msg);
         let data = encrypted_msg.to_bytes()?;
+        debug!("Serialized to {} bytes, first 16: {:?}", data.len(), &data[..data.len().min(16)]);
         
         drop(handler); // Release lock before sending
         
