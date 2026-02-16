@@ -148,8 +148,13 @@ impl Network {
             identify,
         };
         
-        // Create swarm
-        let swarm = Swarm::new(transport, behaviour, local_peer_id, libp2p::swarm::Config::with_tokio_executor());
+        // Create swarm with custom config to prevent idle disconnections
+        // Default idle_connection_timeout is 120 seconds (2 minutes) which causes unwanted disconnections
+        // We set it to 1 hour to keep connections alive longer
+        let swarm_config = libp2p::swarm::Config::with_tokio_executor()
+            .with_idle_connection_timeout(Duration::from_secs(3600)); // 1 hour
+        
+        let swarm = Swarm::new(transport, behaviour, local_peer_id, swarm_config);
         
         // Create gossipsub topic
         let gossipsub_topic = gossipsub::IdentTopic::new("otter-chat");
