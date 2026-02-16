@@ -654,7 +654,7 @@ async fn show_peers(command_tx: &mpsc::Sender<NetworkCommand>) -> Result<()> {
 }
 
 async fn send_message(
-    _command_tx: &mpsc::Sender<NetworkCommand>,
+    command_tx: &mpsc::Sender<NetworkCommand>,
     message_handler: &Arc<Mutex<MessageHandler>>,
 ) -> Result<()> {
     let handler = message_handler.lock().await;
@@ -683,11 +683,36 @@ async fn send_message(
         let mut handler = message_handler.lock().await;
         
         let encrypted_msg = handler.prepare_encrypted_message(peer_id_str, &message)?;
-        let _data = encrypted_msg.to_bytes()?;
+        let data = encrypted_msg.to_bytes()?;
         
-        // For now, we'll send via gossipsub broadcast
-        // In a production system, you'd want direct peer-to-peer messaging
-        println!("✓ Message encrypted and sent!");
+        drop(handler); // Release lock before sending
+        
+        // Get list of connected peers to send the message
+        let (tx, mut rx) = mpsc::channel(1);
+        command_tx
+            .send(NetworkCommand::ListPeers { response: tx })
+            .await?;
+        
+        if let Some(connected_peers) = rx.recv().await {
+            if connected_peers.is_empty() {
+                println!("No connected peers available. Message not sent.");
+                return Ok(());
+            }
+            
+            // Send encrypted message via gossipsub (broadcast to all connected peers)
+            // The encryption ensures only the intended recipient can decrypt it
+            let to = connected_peers[0].clone(); // Use first peer, gossipsub will broadcast
+            
+            if let Err(e) = command_tx
+                .send(NetworkCommand::SendMessage { to, data })
+                .await
+            {
+                error!("Failed to send message: {}", e);
+                println!("✗ Failed to send message: {}", e);
+            } else {
+                println!("✓ Message encrypted and sent!");
+            }
+        }
     }
     
     Ok(())
