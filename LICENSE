@@ -1,0 +1,106 @@
+# Otter License
+
+Copyright (c) 2026 GGally / Emanuele D'Angelo. All rights reserved.
+
+## Terms and Conditions
+
+### 1. Definitions
+
+"Software" refers to the Otter decentralized chat platform, including all source code, 
+documentation, and associated materials.
+
+"Author" refers to the copyright holder(s) listed above.
+
+"You" refers to the individual or legal entity exercising permissions granted by this License.
+
+"Fork" refers to any derivative work, modified version, or substantial copy of the Software.
+
+### 2. Grant of Rights
+
+Subject to the terms and conditions of this License, the Author hereby grants You a 
+worldwide, non-exclusive, no-charge, royalty-free license to:
+
+a) **Use** the Software for personal, educational, or non-commercial purposes
+b) **Study** the source code and understand how it works
+c) **Contribute** improvements, bug fixes, and features back to the official repository
+
+### 3. Restrictions
+
+You may NOT, without explicit written permission from the Author:
+
+a) **Distribute** modified versions of the Software under a different name or branding
+b) **Create commercial forks** or derivative works for profit
+c) **Remove or alter** copyright notices, license information, or attribution
+d) **Use** the Software name, logo, or trademarks without authorization
+e) **Deploy** public instances or services based on modified versions
+f) **Sublicense** or transfer these rights to third parties
+
+### 4. Contributions
+
+By submitting a pull request, patch, or contribution to this project, You agree that:
+
+a) You grant the Author **perpetual, irrevocable, worldwide rights** to use, modify, 
+   and distribute your contribution under any license
+b) You retain copyright to your contribution but waive exclusive rights
+c) Your contribution does not violate third-party rights or licenses
+d) You accept that the Author may accept or reject contributions at sole discretion
+
+### 5. Official Distribution
+
+Only the Author may:
+
+a) Release official versions of the Software
+b) Determine the roadmap and feature set
+c) Create and distribute binaries, installers, or packages
+d) Authorize third-party distributions
+
+### 6. Security and Safety
+
+To protect users from malicious forks:
+
+a) Only official releases from the Author's repositories are considered secure
+b) Unofficial forks or modified versions are explicitly **not endorsed**
+c) Users should verify authenticity before installing
+
+### 7. Commercial Use
+
+For commercial use, integration into proprietary products, or services:
+
+a) Contact the Author for a separate **commercial license**
+b) Revenue-generating applications require explicit authorization
+c) Enterprise deployments may require licensing fees
+
+### 8. Warranty Disclaimer
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, 
+INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR 
+PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY CLAIM, 
+DAMAGES OR OTHER LIABILITY ARISING FROM USE OF THE SOFTWARE.
+
+### 9. Termination
+
+This License automatically terminates if You fail to comply with its terms. Upon termination, 
+You must cease all use and destroy all copies of the Software.
+
+### 10. Governing Law
+
+This License shall be governed by the laws of Italy, without regard to 
+conflict of law provisions.
+
+---
+
+## Contact for Licensing
+
+For commercial licensing, partnerships, or permissions:
+- Email: info@ggally.net
+- Website: https://ggally.net
+
+## Contributor License Agreement
+
+Contributors must sign a CLA available at: [CLA.md](CLA.md)
+
+---
+
+**Notice**: This is a custom proprietary license. The Software is NOT open source under 
+OSI-approved definitions but allows source code inspection and community contributions 
+under controlled terms.
