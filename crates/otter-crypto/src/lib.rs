@@ -40,11 +40,12 @@ pub enum CryptoError {
 
 /// Encrypted message envelope with replay protection
 #[derive(Clone, Serialize, Deserialize, Debug)]
+#[serde(deny_unknown_fields)]
 pub struct EncryptedMessage {
     /// Nonce used for encryption (96 bits / 12 bytes)
-    nonce: Vec<u8>,
+    pub nonce: Vec<u8>,
     /// Encrypted ciphertext with authentication tag
-    ciphertext: Vec<u8>,
+    pub ciphertext: Vec<u8>,
     /// Optional associated data (not encrypted but authenticated)
     #[serde(skip_serializing_if = "Option::is_none")]
     associated_data: Option<Vec<u8>>,

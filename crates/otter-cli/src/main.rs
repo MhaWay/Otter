@@ -74,8 +74,12 @@ enum Commands {
 #[tokio::main]
 async fn main() -> Result<()> {
     // Initialize logging
+    // Default to debug for otter, info for libp2p (can override with RUST_LOG env var)
     tracing_subscriber::fmt()
-        .with_env_filter("otter=info,libp2p=info")
+        .with_env_filter(
+            std::env::var("RUST_LOG")
+                .unwrap_or_else(|_| "otter=debug,libp2p=info".to_string())
+        )
         .init();
     
     let cli = Cli::parse();
@@ -550,7 +554,11 @@ async fn handle_network_event(
         NetworkEvent::MessageReceived { from, data } => {
             debug!("Received {} bytes from {}", data.len(), from);
             debug!("First 32 bytes as hex: {}", hex::encode(&data[..data.len().min(32)]));
-            debug!("Enum tag (first byte): {}", data[0]);
+            if !data.is_empty() {
+                debug!("Enum tag (first byte): {} (0x{:02x}, ASCII: '{}')", 
+                    data[0], data[0], 
+                    if data[0].is_ascii_graphic() { data[0] as char } else { '?' });
+            }
             match Message::from_bytes(&data) {
                 Ok(message) => {
                     match message {
@@ -610,7 +618,16 @@ async fn handle_network_event(
                     }
                 }
                 Err(e) => {
-                    warn!("Failed to deserialize message from {}: {}", from, e);
+                    error!("Failed to deserialize message from {}: {}", from, e);
+                    error!("Message size: {} bytes", data.len());
+                    error!("First 16 bytes: {:?}", &data[..data.len().min(16)]);
+                    error!("Hex dump: {}", hex::encode(&data[..data.len().min(64)]));
+                    if !data.is_empty() && data[0].is_ascii_graphic() {
+                        error!("First byte looks like ASCII '{}' ({}), suggesting possible JSON/text instead of bincode", 
+                            data[0] as char, data[0]);
+                    }
+                    error!("This usually means the sender is using a different version of the protocol.");
+                    error!("Make sure both peers are running the same compiled version of Otter.");
                 }
             }
         }

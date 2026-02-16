@@ -104,16 +104,22 @@ impl Message {
             .map_err(|e| MessagingError::SerializationError(e.to_string()))
     }
     
-    /// Serialize message to bytes
+    /// Serialize message to MessagePack bytes
+    /// 
+    /// Uses MessagePack with named struct serialization (maps, not arrays)
+    /// to ensure compatibility with complex nested structures.
     pub fn to_bytes(&self) -> Result<Vec<u8>, MessagingError> {
-        bincode::serialize(self)
-            .map_err(|e| MessagingError::SerializationError(e.to_string()))
+        let mut buf = Vec::new();
+        let mut serializer = rmp_serde::Serializer::new(&mut buf).with_struct_map();
+        serde::Serialize::serialize(self, &mut serializer)
+            .map_err(|e| MessagingError::SerializationError(format!("MessagePack encode error: {}", e)))?;
+        Ok(buf)
     }
     
-    /// Deserialize message from bytes
+    /// Deserialize message from MessagePack bytes
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, MessagingError> {
-        bincode::deserialize(bytes)
-            .map_err(|e| MessagingError::SerializationError(e.to_string()))
+        rmp_serde::from_slice(bytes)
+            .map_err(|e| MessagingError::SerializationError(format!("MessagePack decode error: {}", e)))
     }
 }
 
@@ -276,6 +282,49 @@ mod tests {
         } else {
             panic!("Wrong message type");
         }
+    }
+    
+    #[test]
+    fn test_encrypted_message_bincode_roundtrip() {
+        // This test verifies that encrypted messages can be serialized and deserialized correctly
+        let alice = Identity::generate().unwrap();
+        let bob = Identity::generate().unwrap();
+        
+        let alice_public = PublicIdentity::from_identity(&alice);
+        let bob_public = PublicIdentity::from_identity(&bob);
+        
+        let mut alice_handler = MessageHandler::new(alice);
+        let mut bob_handler = MessageHandler::new(bob);
+        
+        alice_handler.register_peer(bob_public.clone()).unwrap();
+        bob_handler.register_peer(alice_public).unwrap();
+        
+        // Alice creates encrypted message
+        let text = "Ciao";
+        let encrypted_msg = alice_handler
+            .prepare_encrypted_message(bob_public.peer_id().as_str(), text)
+            .unwrap();
+        
+        // Serialize to bytes
+        let bytes = encrypted_msg.to_bytes().unwrap();
+        println!("Serialized {} bytes", bytes.len());
+        println!("First 64 bytes hex: {}", hex::encode(&bytes[..bytes.len().min(64)]));
+        
+        // Deserialize from bytes
+        let deserialized_msg = Message::from_bytes(&bytes)
+            .expect("Failed to deserialize encrypted message");
+        
+        // Verify it's still an encrypted message
+        match deserialized_msg {
+            Message::Encrypted { .. } => {
+                println!("✓ Deserialization successful!");
+            },
+            _ => panic!("Deserialized to wrong message type!"),
+        }
+        
+        // Bob should be able to decrypt it
+        let decrypted = bob_handler.decrypt_message(&deserialized_msg).unwrap();
+        assert_eq!(decrypted, text);
     }
     
     #[test]

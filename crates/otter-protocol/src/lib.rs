@@ -212,8 +212,10 @@ pub struct ProtocolMessage {
 }
 
 /// Message payload types
+/// 
+/// NOTE: Uses default externally-tagged enum format for bincode compatibility.
+/// Do NOT add #[serde(tag = "type")] as it breaks bincode serialization.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
 pub enum MessagePayload {
     /// Handshake initiation
     Handshake(Handshake),
