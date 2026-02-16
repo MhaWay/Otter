@@ -34,7 +34,6 @@ pub enum MessagingError {
 
 /// Message types in the Otter protocol
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
 pub enum Message {
     /// Plain text message
     Text {
