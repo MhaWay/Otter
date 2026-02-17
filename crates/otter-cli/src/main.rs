@@ -6,14 +6,9 @@
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use crossterm::{
-    event::{self, Event, KeyCode},
-    terminal::{disable_raw_mode, enable_raw_mode},
-};
 use dialoguer::{theme::ColorfulTheme, Input, Select};
-use libp2p::PeerId;
 use otter_identity::{Identity, PublicIdentity};
-use otter_messaging::{Message, MessageHandler, MessagingEvent};
+use otter_messaging::{Message, MessageHandler};
 use otter_network::{create_network_channels, Network, NetworkCommand, NetworkEvent};
 use otter_protocol::SignalingMessage;
 use otter_voice::{CallState, VoiceManager};
@@ -24,15 +19,28 @@ use std::{
     time::Duration,
 };
 use tokio::sync::{mpsc, Mutex};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 use tracing_subscriber;
 
 #[derive(Parser)]
 #[command(name = "otter")]
 #[command(about = "Privacy-focused decentralized chat platform", long_about = None)]
+#[command(version)]
 struct Cli {
+    /// Optional nickname for this peer (display only - not propagated over network)
+    #[arg(long)]
+    nickname: Option<String>,
+    
+    /// Port to listen on (default: random)
+    #[arg(long)]
+    port: Option<u16>,
+    
+    /// Data directory for identity and storage (default: ~/.otter)
+    #[arg(long, value_name = "PATH")]
+    data_dir: Option<PathBuf>,
+    
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
@@ -44,7 +52,7 @@ enum Commands {
         output: PathBuf,
     },
     
-    /// Start the chat peer
+    /// Start the chat peer (legacy mode)
     Start {
         /// Path to identity file
         #[arg(short, long, default_value = "identity.json")]
@@ -66,21 +74,29 @@ enum Commands {
 #[tokio::main]
 async fn main() -> Result<()> {
     // Initialize logging
+    // Default to debug for otter, info for libp2p (can override with RUST_LOG env var)
     tracing_subscriber::fmt()
-        .with_env_filter("otter=info,libp2p=info")
+        .with_env_filter(
+            std::env::var("RUST_LOG")
+                .unwrap_or_else(|_| "otter=debug,libp2p=info".to_string())
+        )
         .init();
     
     let cli = Cli::parse();
     
     match cli.command {
-        Commands::Init { output } => {
+        Some(Commands::Init { output }) => {
             init_identity(output)?;
         }
-        Commands::Start { identity, port } => {
+        Some(Commands::Start { identity, port }) => {
             start_peer(identity, port).await?;
         }
-        Commands::Info { identity } => {
+        Some(Commands::Info { identity }) => {
             show_info(identity)?;
+        }
+        None => {
+            // Default mode: Auto-setup and start
+            run_simple_mode(cli.nickname, cli.port, cli.data_dir).await?;
         }
     }
     
@@ -124,6 +140,192 @@ fn show_info(path: PathBuf) -> Result<()> {
     
     Ok(())
 }
+
+/// Run in simple mode with auto-setup
+async fn run_simple_mode(nickname: Option<String>, port: Option<u16>, data_dir: Option<PathBuf>) -> Result<()> {
+    // Determine data directory
+    let data_dir = match data_dir {
+        Some(dir) => dir,
+        None => {
+            // Use ~/.otter as default
+            let home = dirs::home_dir().context("Unable to determine home directory")?;
+            home.join(".otter")
+        }
+    };
+    
+    // Create data directory if it doesn't exist
+    if !data_dir.exists() {
+        fs::create_dir_all(&data_dir)
+            .context("Failed to create data directory")?;
+        println!("✓ Created data directory: {}", data_dir.display());
+    }
+    
+    // Path to identity file
+    let identity_path = data_dir.join("identity.json");
+    
+    // Load or create identity
+    let identity = if identity_path.exists() {
+        let json = fs::read_to_string(&identity_path)?;
+        Identity::from_json(&json)?
+    } else {
+        println!("🦦 First run detected - generating new identity...");
+        let identity = Identity::generate()?;
+        let json = identity.to_json()?;
+        fs::write(&identity_path, json)?;
+        println!("✓ Identity generated and saved to: {}", identity_path.display());
+        identity
+    };
+    
+    let public = PublicIdentity::from_identity(&identity);
+    let peer_id = identity.peer_id();
+    let fingerprint = hex::encode(&public.verifying_key()?.to_bytes()[..8]);
+    
+    // Print welcome banner
+    println!();
+    println!("╔══════════════════════════════════════════════════════════════╗");
+    println!("║          🦦 Otter - Decentralized Private Chat              ║");
+    println!("╚══════════════════════════════════════════════════════════════╝");
+    println!();
+    
+    if let Some(ref nick) = nickname {
+        println!("📝 Nickname:    {}", nick);
+    }
+    println!("🆔 Peer ID:     {}", peer_id);
+    println!("🔑 Fingerprint: {}", fingerprint);
+    println!("📁 Data Dir:    {}", data_dir.display());
+    println!();
+    
+    // Determine port
+    let port = port.unwrap_or(0);
+    
+    // Start the peer
+    println!("🚀 Starting Otter peer...");
+    println!();
+    
+    // Create network channels
+    let (event_tx, mut event_rx, command_tx, command_rx) = create_network_channels();
+    
+    // Create network
+    let mut network = Network::new(event_tx, command_rx)?;
+    
+    // Start listening
+    let listen_addr = format!("/ip4/0.0.0.0/tcp/{}", port);
+    network.listen(&listen_addr)?;
+    
+    // Create message handler
+    let message_handler = Arc::new(Mutex::new(MessageHandler::new(identity)));
+    
+    // Create voice manager
+    let voice_manager = Arc::new(Mutex::new(VoiceManager::new()?));
+    
+    // Create signaling channel
+    let (signaling_tx, mut signaling_rx) = mpsc::unbounded_channel();
+    {
+        let mut vm = voice_manager.lock().await;
+        vm.set_signaling_channel(signaling_tx);
+    }
+    
+    // Spawn network task
+    let network_handle = tokio::spawn(async move {
+        if let Err(e) = network.run().await {
+            error!("Network error: {}", e);
+        }
+    });
+    
+    // Clone for tasks
+    let msg_handler = message_handler.clone();
+    let voice_mgr = voice_manager.clone();
+    let cmd_tx_events = command_tx.clone();
+    
+    // Spawn signaling handler (sends signaling messages over encrypted channel)
+    let msg_handler_sig = message_handler.clone();
+    tokio::spawn(async move {
+        while let Some((peer_id, signaling_msg)) = signaling_rx.recv().await {
+            // TODO: Implement actual message sending via encrypted channel
+            // Currently placeholder for WebRTC signaling implementation
+            if let Ok(json) = serde_json::to_string(&signaling_msg) {
+                let _handler = msg_handler_sig.lock().await;
+                let _msg_content = format!("SIGNALING:{}", json);
+                info!("Sending signaling message to {}: {:?}", peer_id, signaling_msg);
+            }
+        }
+    });
+    
+    // Spawn event handler
+    let event_handle = tokio::spawn(async move {
+        while let Some(event) = event_rx.recv().await {
+            if let Err(e) = handle_network_event(event, msg_handler.clone(), voice_mgr.clone(), cmd_tx_events.clone()).await {
+                error!("Error handling event: {}", e);
+            }
+        }
+    });
+    
+    // Wait a moment for network to start
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    
+    println!("✓ Network started successfully");
+    println!("✓ Listening for peers on the network...");
+    println!();
+    println!("╔══════════════════════════════════════════════════════════════╗");
+    println!("║  Available Commands:                                         ║");
+    println!("║  • /peers  - List connected peers                            ║");
+    println!("║  • /send   - Send an encrypted message                       ║");
+    println!("║  • /call   - Start a voice call                              ║");
+    println!("║  • /hangup - End the current call                            ║");
+    println!("║  • /help   - Show this help                                  ║");
+    println!("║  • /quit   - Exit Otter                                      ║");
+    println!("╚══════════════════════════════════════════════════════════════╝");
+    println!();
+    println!("💡 Tip: Share your Peer ID with others to connect!");
+    println!();
+    
+    // Interactive loop
+    loop {
+        let input: String = Input::with_theme(&ColorfulTheme::default())
+            .with_prompt("otter>")
+            .allow_empty(true)
+            .interact_text()?;
+        
+        let input = input.trim();
+        
+        if input.is_empty() {
+            continue;
+        }
+        
+        match input {
+            "/quit" | "/exit" => {
+                println!("Goodbye! 🦦");
+                break;
+            }
+            "/help" => {
+                show_help();
+            }
+            "/peers" => {
+                show_peers(&command_tx).await?;
+            }
+            "/send" => {
+                send_message(&command_tx, &message_handler).await?;
+            }
+            "/call" => {
+                start_call(&voice_manager).await?;
+            }
+            "/hangup" => {
+                hangup_call(&voice_manager).await?;
+            }
+            _ => {
+                println!("Unknown command. Type /help for available commands.");
+            }
+        }
+    }
+    
+    // Cleanup
+    drop(command_tx);
+    let _ = tokio::time::timeout(Duration::from_secs(2), network_handle).await;
+    let _ = tokio::time::timeout(Duration::from_secs(2), event_handle).await;
+    
+    Ok(())
+}
+
 
 /// Start the chat peer
 async fn start_peer(identity_path: PathBuf, port: u16) -> Result<()> {
@@ -169,21 +371,19 @@ async fn start_peer(identity_path: PathBuf, port: u16) -> Result<()> {
     });
     
     // Clone for tasks
-    let cmd_tx = command_tx.clone();
     let msg_handler = message_handler.clone();
     let voice_mgr = voice_manager.clone();
+    let cmd_tx_events = command_tx.clone();
     
     // Spawn signaling handler (sends signaling messages over encrypted channel)
-    let cmd_tx_sig = command_tx.clone();
     let msg_handler_sig = message_handler.clone();
     tokio::spawn(async move {
         while let Some((peer_id, signaling_msg)) = signaling_rx.recv().await {
-            // Serialize signaling message and send via encrypted messaging
+            // TODO: Implement actual message sending via encrypted channel
+            // Currently placeholder for WebRTC signaling implementation
             if let Ok(json) = serde_json::to_string(&signaling_msg) {
-                let handler = msg_handler_sig.lock().await;
-                // Send as text message with special prefix
-                let msg_content = format!("SIGNALING:{}", json);
-                // In real implementation, send via encrypted channel
+                let _handler = msg_handler_sig.lock().await;
+                let _msg_content = format!("SIGNALING:{}", json);
                 info!("Sending signaling message to {}: {:?}", peer_id, signaling_msg);
             }
         }
@@ -192,7 +392,7 @@ async fn start_peer(identity_path: PathBuf, port: u16) -> Result<()> {
     // Spawn event handler
     let event_handle = tokio::spawn(async move {
         while let Some(event) = event_rx.recv().await {
-            if let Err(e) = handle_network_event(event, msg_handler.clone(), voice_mgr.clone()).await {
+            if let Err(e) = handle_network_event(event, msg_handler.clone(), voice_mgr.clone(), cmd_tx_events.clone()).await {
                 error!("Error handling event: {}", e);
             }
         }
@@ -264,21 +464,86 @@ async fn handle_network_event(
     event: NetworkEvent,
     message_handler: Arc<Mutex<MessageHandler>>,
     voice_manager: Arc<Mutex<VoiceManager>>,
+    command_tx: mpsc::Sender<NetworkCommand>,
 ) -> Result<()> {
     match event {
         NetworkEvent::PeerDiscovered { peer_id, addresses } => {
             info!("Discovered peer: {} at {:?}", peer_id, addresses);
             println!("\n✓ Discovered peer: {}", peer_id);
+            
+            // Automatically dial the discovered peer
+            if let Some(address) = addresses.first() {
+                info!("Auto-dialing peer {} at {}", peer_id, address);
+                if let Err(e) = command_tx
+                    .send(NetworkCommand::DialPeer {
+                        peer_id: peer_id.clone(),
+                        address: address.clone(),
+                    })
+                    .await
+                {
+                    error!("Failed to dial peer {}: {}", peer_id, e);
+                } else {
+                    println!("  → Connecting...");
+                }
+            }
         }
         
         NetworkEvent::PeerConnected { peer_id } => {
             info!("Connected to peer: {}", peer_id);
             println!("\n✓ Connected: {}", peer_id);
             
-            // Send identity to new peer
+            // Send identity with a delay as fallback
+            // (in case PeerReadyForMessages doesn't fire)
+            let cmd_tx = command_tx.clone();
+            let msg_handler = message_handler.clone();
+            let peer = peer_id.clone();
+            tokio::spawn(async move {
+                // Wait for gossipsub to potentially be ready
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                
+                let handler = msg_handler.lock().await;
+                let identity_msg = Message::identity(handler.public_identity());
+                drop(handler);
+                
+                if let Ok(data) = identity_msg.to_bytes() {
+                    let _ = cmd_tx.send(NetworkCommand::SendMessage {
+                        to: peer,
+                        data,
+                    }).await;
+                    info!("Sent identity via fallback mechanism");
+                }
+            });
+        }
+        
+        NetworkEvent::PeerReadyForMessages { peer_id } => {
+            info!("Peer {} ready for messages (gossipsub subscribed)", peer_id);
+            println!("  → Peer ready, sending identity...");
+            
+            // Auto-send our identity to new peer now that gossipsub is ready
             let handler = message_handler.lock().await;
-            let _identity_msg = Message::identity(handler.public_identity());
-            println!("  Exchanging identities...");
+            let identity_msg = Message::identity(handler.public_identity());
+            drop(handler); // Release lock before sending
+            
+            match identity_msg.to_bytes() {
+                Ok(data) => {
+                    // Send identity message via network
+                    if let Err(e) = command_tx
+                        .send(NetworkCommand::SendMessage {
+                            to: peer_id.clone(),
+                            data,
+                        })
+                        .await
+                    {
+                        error!("Failed to send identity to {}: {}", peer_id, e);
+                    } else {
+                        info!("Sent identity to peer: {}", peer_id);
+                        println!("  ✓ Identity sent");
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to serialize identity message: {}", e);
+                }
+            }
         }
         
         NetworkEvent::PeerDisconnected { peer_id } => {
@@ -287,18 +552,27 @@ async fn handle_network_event(
         }
         
         NetworkEvent::MessageReceived { from, data } => {
-            if let Ok(message) = Message::from_bytes(&data) {
-                match message {
-                    Message::Identity { public_identity, .. } => {
-                        let peer_id = public_identity.peer_id().to_string();
-                        let mut handler = message_handler.lock().await;
-                        
-                        if let Err(e) = handler.register_peer(public_identity) {
-                            warn!("Failed to register peer: {}", e);
-                        } else {
-                            println!("\n✓ Identity verified for peer: {}", peer_id);
+            debug!("Received {} bytes from {}", data.len(), from);
+            debug!("First 32 bytes as hex: {}", hex::encode(&data[..data.len().min(32)]));
+            if !data.is_empty() {
+                debug!("Enum tag (first byte): {} (0x{:02x}, ASCII: '{}')", 
+                    data[0], data[0], 
+                    if data[0].is_ascii_graphic() { data[0] as char } else { '?' });
+            }
+            match Message::from_bytes(&data) {
+                Ok(message) => {
+                    match message {
+                        Message::Identity { public_identity, .. } => {
+                            let peer_id = public_identity.peer_id().to_string();
+                            info!("Received identity from peer: {}", peer_id);
+                            let mut handler = message_handler.lock().await;
+                            
+                            if let Err(e) = handler.register_peer(public_identity) {
+                                warn!("Failed to register peer: {}", e);
+                            } else {
+                                println!("\n✓ Identity verified for peer: {}", peer_id);
+                            }
                         }
-                    }
                     
                     Message::Text { content, .. } => {
                         // Check if it's a signaling message
@@ -341,6 +615,19 @@ async fn handle_network_event(
                     }
                     
                     _ => {}
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to deserialize message from {}: {}", from, e);
+                    error!("Message size: {} bytes", data.len());
+                    error!("First 16 bytes: {:?}", &data[..data.len().min(16)]);
+                    error!("Hex dump: {}", hex::encode(&data[..data.len().min(64)]));
+                    if !data.is_empty() && data[0].is_ascii_graphic() {
+                        error!("First byte looks like ASCII '{}' ({}), suggesting possible JSON/text instead of bincode", 
+                            data[0] as char, data[0]);
+                    }
+                    error!("This usually means the sender is using a different version of the protocol.");
+                    error!("Make sure both peers are running the same compiled version of Otter.");
                 }
             }
         }
@@ -415,11 +702,44 @@ async fn send_message(
         let mut handler = message_handler.lock().await;
         
         let encrypted_msg = handler.prepare_encrypted_message(peer_id_str, &message)?;
-        let _data = encrypted_msg.to_bytes()?;
+        debug!("Prepared encrypted message: {:?}", encrypted_msg);
+        let data = encrypted_msg.to_bytes()?;
+        debug!("Serialized to {} bytes", data.len());
+        if !data.is_empty() {
+            debug!("First 32 bytes as hex: {}", hex::encode(&data[..data.len().min(32)]));
+            debug!("Enum tag (first byte): {}", data[0]);
+        }
         
-        // For now, we'll send via gossipsub broadcast
-        // In a production system, you'd want direct peer-to-peer messaging
-        println!("✓ Message encrypted and sent!");
+        drop(handler); // Release lock before sending
+        
+        // Get list of connected peers to send the message
+        let (tx, mut rx) = mpsc::channel(1);
+        command_tx
+            .send(NetworkCommand::ListPeers { response: tx })
+            .await?;
+        
+        if let Some(connected_peers) = rx.recv().await {
+            if connected_peers.is_empty() {
+                println!("No connected peers available. Message not sent.");
+                return Ok(());
+            }
+            
+            // Send encrypted message via gossipsub (broadcast to all connected peers)
+            // The encryption ensures only the intended recipient can decrypt it
+            // NOTE: The 'to' parameter is currently ignored by gossipsub broadcast.
+            // All connected peers receive the message, but only the intended recipient can decrypt it.
+            let to = connected_peers[0].clone();
+            
+            if let Err(e) = command_tx
+                .send(NetworkCommand::SendMessage { to, data })
+                .await
+            {
+                error!("Failed to send message: {}", e);
+                println!("✗ Failed to send message: {}", e);
+            } else {
+                println!("✓ Message encrypted and sent!");
+            }
+        }
     }
     
     Ok(())

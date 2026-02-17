@@ -1,0 +1,40 @@
+# Otter Configuration File (Optional)
+# 
+# This file is OPTIONAL - Otter works perfectly without it!
+# All settings have sensible defaults.
+#
+# If you want to customize Otter's behavior, copy this file to:
+#   Windows: %USERPROFILE%\.otter\config.toml
+#   Linux/macOS: ~/.otter/config.toml
+
+[network]
+# Port to listen on (0 = random port, recommended)
+# port = 0
+
+# Enable mDNS for local network discovery
+# mdns_enabled = true
+
+# Enable DHT for distributed peer discovery  
+# dht_enabled = true
+
+[identity]
+# Path to identity file (relative to data directory)
+# identity_file = "identity.json"
+
+[logging]
+# Log level: trace, debug, info, warn, error
+# level = "info"
+
+# Log to file (disabled by default)
+# file = "otter.log"
+
+[ui]
+# Your display nickname (optional)
+# nickname = "Alice"
+
+# Theme (currently only "default" is supported)
+# theme = "default"
+
+# NOTE: This config file format is a placeholder for future features.
+# Currently, most settings are controlled via command-line flags.
+# See: otter --help

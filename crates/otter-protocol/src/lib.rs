@@ -132,16 +132,19 @@ impl Handshake {
         Ok(())
     }
     
-    /// Serialize to bytes
+    /// Serialize to bytes using MessagePack
     pub fn to_bytes(&self) -> Result<Vec<u8>, ProtocolError> {
-        bincode::serialize(self)
-            .map_err(|e| ProtocolError::SerializationError(e.to_string()))
+        let mut buf = Vec::new();
+        let mut serializer = rmp_serde::Serializer::new(&mut buf).with_struct_map();
+        serde::Serialize::serialize(self, &mut serializer)
+            .map_err(|e| ProtocolError::SerializationError(format!("MessagePack encode: {}", e)))?;
+        Ok(buf)
     }
     
-    /// Deserialize from bytes
+    /// Deserialize from bytes using MessagePack
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, ProtocolError> {
-        bincode::deserialize(bytes)
-            .map_err(|e| ProtocolError::SerializationError(e.to_string()))
+        rmp_serde::from_slice(bytes)
+            .map_err(|e| ProtocolError::SerializationError(format!("MessagePack decode: {}", e)))
     }
 }
 
@@ -182,16 +185,19 @@ impl HandshakeResponse {
         }
     }
     
-    /// Serialize to bytes
+    /// Serialize to bytes using MessagePack
     pub fn to_bytes(&self) -> Result<Vec<u8>, ProtocolError> {
-        bincode::serialize(self)
-            .map_err(|e| ProtocolError::SerializationError(e.to_string()))
+        let mut buf = Vec::new();
+        let mut serializer = rmp_serde::Serializer::new(&mut buf).with_struct_map();
+        serde::Serialize::serialize(self, &mut serializer)
+            .map_err(|e| ProtocolError::SerializationError(format!("MessagePack encode: {}", e)))?;
+        Ok(buf)
     }
     
-    /// Deserialize from bytes
+    /// Deserialize from bytes using MessagePack
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, ProtocolError> {
-        bincode::deserialize(bytes)
-            .map_err(|e| ProtocolError::SerializationError(e.to_string()))
+        rmp_serde::from_slice(bytes)
+            .map_err(|e| ProtocolError::SerializationError(format!("MessagePack decode: {}", e)))
     }
 }
 
@@ -212,8 +218,9 @@ pub struct ProtocolMessage {
 }
 
 /// Message payload types
+/// 
+/// NOTE: Uses default externally-tagged enum format for MessagePack compatibility.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
 pub enum MessagePayload {
     /// Handshake initiation
     Handshake(Handshake),
@@ -251,16 +258,19 @@ impl ProtocolMessage {
         }
     }
     
-    /// Serialize to bytes
+    /// Serialize to bytes using MessagePack
     pub fn to_bytes(&self) -> Result<Vec<u8>, ProtocolError> {
-        bincode::serialize(self)
-            .map_err(|e| ProtocolError::SerializationError(e.to_string()))
+        let mut buf = Vec::new();
+        let mut serializer = rmp_serde::Serializer::new(&mut buf).with_struct_map();
+        serde::Serialize::serialize(self, &mut serializer)
+            .map_err(|e| ProtocolError::SerializationError(format!("MessagePack encode: {}", e)))?;
+        Ok(buf)
     }
     
-    /// Deserialize from bytes
+    /// Deserialize from bytes using MessagePack
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, ProtocolError> {
-        bincode::deserialize(bytes)
-            .map_err(|e| ProtocolError::SerializationError(e.to_string()))
+        rmp_serde::from_slice(bytes)
+            .map_err(|e| ProtocolError::SerializationError(format!("MessagePack decode: {}", e)))
     }
 }
 
@@ -407,16 +417,19 @@ impl SignalingProtocolMessage {
             .map_err(|e| ProtocolError::SerializationError(e.to_string()))
     }
     
-    /// Serialize to bytes
+    /// Serialize to bytes using MessagePack
     pub fn to_bytes(&self) -> Result<Vec<u8>, ProtocolError> {
-        bincode::serialize(self)
-            .map_err(|e| ProtocolError::SerializationError(e.to_string()))
+        let mut buf = Vec::new();
+        let mut serializer = rmp_serde::Serializer::new(&mut buf).with_struct_map();
+        serde::Serialize::serialize(self, &mut serializer)
+            .map_err(|e| ProtocolError::SerializationError(format!("MessagePack encode: {}", e)))?;
+        Ok(buf)
     }
     
-    /// Deserialize from bytes
+    /// Deserialize from bytes using MessagePack
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, ProtocolError> {
-        bincode::deserialize(bytes)
-            .map_err(|e| ProtocolError::SerializationError(e.to_string()))
+        rmp_serde::from_slice(bytes)
+            .map_err(|e| ProtocolError::SerializationError(format!("MessagePack decode: {}", e)))
     }
 }
 

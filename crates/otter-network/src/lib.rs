@@ -27,7 +27,7 @@ use std::{
 };
 use thiserror::Error as ThisError;
 use tokio::sync::mpsc;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 use void::Void;
 
 #[derive(ThisError, Debug)]
@@ -53,6 +53,8 @@ pub enum NetworkEvent {
     PeerConnected { peer_id: PeerId },
     /// A peer disconnected
     PeerDisconnected { peer_id: PeerId },
+    /// A peer subscribed to gossipsub and is ready for messages
+    PeerReadyForMessages { peer_id: PeerId },
     /// Received a message from a peer
     MessageReceived { from: PeerId, data: Vec<u8> },
     /// Network listening started
@@ -146,8 +148,13 @@ impl Network {
             identify,
         };
         
-        // Create swarm
-        let swarm = Swarm::new(transport, behaviour, local_peer_id, libp2p::swarm::Config::with_tokio_executor());
+        // Create swarm with custom config to prevent idle disconnections
+        // Default idle_connection_timeout is 120 seconds (2 minutes) which causes unwanted disconnections
+        // Set to 10 minutes - balances resource usage with connection stability
+        let swarm_config = libp2p::swarm::Config::with_tokio_executor()
+            .with_idle_connection_timeout(Duration::from_secs(600)); // 10 minutes
+        
+        let swarm = Swarm::new(transport, behaviour, local_peer_id, swarm_config);
         
         // Create gossipsub topic
         let gossipsub_topic = gossipsub::IdentTopic::new("otter-chat");
@@ -249,6 +256,26 @@ impl Network {
                 }).await;
             }
             
+            SwarmEvent::Behaviour(OtterBehaviourEvent::Gossipsub(
+                gossipsub::Event::Subscribed { peer_id, .. }
+            )) => {
+                info!("Peer {} subscribed to gossipsub topic", peer_id);
+                
+                // Notify that peer is ready for messages via gossipsub
+                let _ = self.event_tx.send(NetworkEvent::PeerReadyForMessages { peer_id }).await;
+            }
+            
+            SwarmEvent::Behaviour(OtterBehaviourEvent::Gossipsub(
+                gossipsub::Event::Unsubscribed { peer_id, .. }
+            )) => {
+                info!("Peer {} unsubscribed from gossipsub topic", peer_id);
+            }
+            
+            SwarmEvent::Behaviour(OtterBehaviourEvent::Gossipsub(event)) => {
+                // Log any other gossipsub events (validation failures, etc.) at debug level
+                debug!("Unhandled gossipsub event: {:?}", event);
+            }
+            
             SwarmEvent::ConnectionEstablished { peer_id, .. } => {
                 info!("Connected to peer: {}", peer_id);
                 self.connected_peers.insert(peer_id);
@@ -280,14 +307,24 @@ impl Network {
     async fn handle_command(&mut self, command: NetworkCommand) -> Result<(), NetworkError> {
         match command {
             NetworkCommand::SendMessage { to, data } => {
-                debug!("Sending message to peer: {}", to);
+                // NOTE: 'to' parameter is currently ignored - gossipsub broadcasts to all subscribers.
+                // E2E encryption ensures only the intended recipient can decrypt the message.
+                debug!("Broadcasting message (intended for: {}, size: {} bytes)", to, data.len());
                 
                 // Publish to gossipsub topic
-                self.swarm
+                match self.swarm
                     .behaviour_mut()
                     .gossipsub
                     .publish(self.gossipsub_topic.clone(), data)
-                    .map_err(|e| NetworkError::SendError(format!("Publish error: {}", e)))?;
+                {
+                    Ok(message_id) => {
+                        debug!("Published message to gossipsub, message_id: {:?}", message_id);
+                    }
+                    Err(e) => {
+                        error!("Failed to publish to gossipsub: {}", e);
+                        return Err(NetworkError::SendError(format!("Publish error: {}", e)));
+                    }
+                }
             }
             
             NetworkCommand::ListPeers { response } => {
