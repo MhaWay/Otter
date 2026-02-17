@@ -15,6 +15,7 @@ use otter_voice::{CallState, VoiceManager};
 use std::{
     fs,
     path::PathBuf,
+    process::{Command, ExitStatus},
     sync::Arc,
     time::Duration,
 };
@@ -27,6 +28,10 @@ use tracing_subscriber;
 #[command(about = "Privacy-focused decentralized chat platform", long_about = None)]
 #[command(version)]
 struct Cli {
+    /// Use command-line interface instead of GUI
+    #[arg(long)]
+    cli: bool,
+    
     /// Optional nickname for this peer (display only - not propagated over network)
     #[arg(long)]
     nickname: Option<String>,
@@ -71,6 +76,36 @@ enum Commands {
     },
 }
 
+/// Launch GUI process, hiding console window on Windows
+fn launch_gui_process(gui_binary: &str) -> Result<ExitStatus> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::{CommandExt, ExitStatusExt};
+        
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        const DETACHED_PROCESS: u32 = 0x00000008;
+        
+        let mut cmd = Command::new(gui_binary);
+        cmd.creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS);
+        // Don't wait for the GUI, just spawn it
+        cmd.spawn()
+            .map_err(|e| anyhow::anyhow!(e))?;
+        
+        // Return success immediately
+        Ok(std::process::ExitStatus::from_raw(0))
+    }
+    
+    #[cfg(not(windows))]
+    {
+        // On non-Windows, spawn in background with nohup
+        Command::new("sh")
+            .arg("-c")
+            .arg(format!("{} &", gui_binary))
+            .status()
+            .map_err(|e| anyhow::anyhow!(e))
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Initialize logging
@@ -84,6 +119,38 @@ async fn main() -> Result<()> {
     
     let cli = Cli::parse();
     
+    // Launch GUI by default if no --cli flag and no subcommand
+    if !cli.cli && cli.command.is_none() {
+        debug!("No --cli flag and no command, launching GUI...");
+        
+        // Try to launch otter (the GUI)
+        let gui_binary = if cfg!(windows) {
+            "otter.exe"
+        } else {
+            "otter"
+        };
+        
+        match launch_gui_process(gui_binary) {
+            Ok(status) => {
+                if status.success() {
+                    return Ok(());
+                } else {
+                    error!("GUI process exited with error code: {:?}", status.code());
+                    return Err(anyhow::anyhow!("GUI process failed"));
+                }
+            }
+            Err(e) => {
+                error!("Failed to launch GUI ({}): {}", gui_binary, e);
+                error!("Make sure otter is installed and available in PATH");
+                error!("Falling back to CLI mode...");
+                eprintln!("\nℹ️  To use the CLI directly, run with --cli flag:");
+                eprintln!("    otter-cli --cli");
+                return Err(e.into());
+            }
+        }
+    }
+    
+    // CLI mode (explicitly requested with --cli or a subcommand is provided)
     match cli.command {
         Some(Commands::Init { output }) => {
             init_identity(output)?;
@@ -95,7 +162,7 @@ async fn main() -> Result<()> {
             show_info(identity)?;
         }
         None => {
-            // Default mode: Auto-setup and start
+            // Default mode: Auto-setup and start (with --cli flag)
             run_simple_mode(cli.nickname, cli.port, cli.data_dir).await?;
         }
     }

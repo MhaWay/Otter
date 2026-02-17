@@ -20,6 +20,7 @@ use std::fmt;
 use thiserror::Error;
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret as X25519StaticSecret};
 use chrono::{DateTime, Utc};
+use std::collections::HashSet;
 
 #[derive(Error, Debug)]
 pub enum IdentityError {
@@ -37,6 +38,10 @@ pub enum IdentityError {
     DeviceRevoked(String),
     #[error("Invalid device signature")]
     InvalidDeviceSignature,
+    #[error("Identity already exists with same peer_id")]
+    IdentityAlreadyExists,
+    #[error("Duplicate peer_id detected")]
+    DuplicatePeerId,
 }
 
 /// A peer's identity in the network
@@ -380,6 +385,63 @@ impl DeviceKey {
     }
 }
 
+/// Identity registry for uniqueness verification
+///
+/// Tracks all known peer IDs to ensure no duplicates exist in the system
+#[derive(Clone)]
+pub struct IdentityRegistry {
+    /// Set of known peer IDs
+    known_peer_ids: HashSet<String>,
+}
+
+impl IdentityRegistry {
+    /// Create a new identity registry
+    pub fn new() -> Self {
+        Self {
+            known_peer_ids: HashSet::new(),
+        }
+    }
+    
+    /// Register a new identity
+    pub fn register(&mut self, peer_id: &PeerId) -> Result<(), IdentityError> {
+        let peer_id_str = peer_id.as_str().to_string();
+        
+        if self.known_peer_ids.contains(&peer_id_str) {
+            return Err(IdentityError::DuplicatePeerId);
+        }
+        
+        self.known_peer_ids.insert(peer_id_str);
+        Ok(())
+    }
+    
+    /// Check if peer ID is already registered
+    pub fn is_registered(&self, peer_id: &PeerId) -> bool {
+        self.known_peer_ids.contains(peer_id.as_str())
+    }
+    
+    /// Get all registered peer IDs
+    pub fn all_registered(&self) -> Vec<PeerId> {
+        self.known_peer_ids
+            .iter()
+            .map(|s| PeerId::from_string(s.clone()))
+            .collect()
+    }
+    
+    /// Verify uniqueness of an identity against registry
+    pub fn verify_unique(&self, identity: &Identity) -> Result<(), IdentityError> {
+        if self.is_registered(identity.peer_id()) {
+            return Err(IdentityError::IdentityAlreadyExists);
+        }
+        Ok(())
+    }
+}
+
+impl Default for IdentityRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Root identity with multi-device support
 ///
 /// Represents a user that can have multiple devices, each with their own keys
@@ -397,6 +459,22 @@ impl RootIdentity {
     pub fn new() -> Result<Self, IdentityError> {
         Ok(Self {
             root: Identity::generate()?,
+            devices: Vec::new(),
+        })
+    }
+    
+    /// Create a new root identity with uniqueness verification
+    pub fn new_with_verification(registry: &mut IdentityRegistry) -> Result<Self, IdentityError> {
+        let root = Identity::generate()?;
+        
+        // Verify uniqueness before registering
+        registry.verify_unique(&root)?;
+        
+        // Register the new identity
+        registry.register(root.peer_id())?;
+        
+        Ok(Self {
+            root,
             devices: Vec::new(),
         })
     }
@@ -576,5 +654,64 @@ mod tests {
         
         root_identity.revoke_device(&device_id).unwrap();
         assert!(!root_identity.is_device_valid(&device_id));
+    }
+    
+    #[test]
+    fn test_identity_registry() {
+        let mut registry = IdentityRegistry::new();
+        let identity1 = Identity::generate().unwrap();
+        
+        // First registration should succeed
+        assert!(registry.register(identity1.peer_id()).is_ok());
+        
+        // Duplicate registration should fail
+        assert!(registry.register(identity1.peer_id()).is_err());
+        
+        // Check is_registered works
+        assert!(registry.is_registered(identity1.peer_id()));
+    }
+    
+    #[test]
+    fn test_uniqueness_verification() {
+        let mut registry = IdentityRegistry::new();
+        let identity1 = Identity::generate().unwrap();
+        
+        // Verify uniqueness before registration
+        assert!(registry.verify_unique(&identity1).is_ok());
+        
+        // Register it
+        registry.register(identity1.peer_id()).unwrap();
+        
+        // Now it should fail uniqueness check
+        assert!(registry.verify_unique(&identity1).is_err());
+    }
+    
+    #[test]
+    fn test_root_identity_with_verification() {
+        let mut registry = IdentityRegistry::new();
+        
+        // Create first root with verification
+        let root1 = RootIdentity::new_with_verification(&mut registry).unwrap();
+        assert!(registry.is_registered(root1.root().peer_id()));
+        
+        // Creating duplicate should fail
+        let root2 = Identity::generate().unwrap();
+        registry.register(root2.peer_id()).unwrap();
+        
+        // Try to create same one again should fail
+        assert!(registry.verify_unique(&root2).is_err());
+    }
+    
+    #[test]
+    fn test_all_registered_peer_ids() {
+        let mut registry = IdentityRegistry::new();
+        let id1 = Identity::generate().unwrap();
+        let id2 = Identity::generate().unwrap();
+        
+        registry.register(id1.peer_id()).unwrap();
+        registry.register(id2.peer_id()).unwrap();
+        
+        let registered = registry.all_registered();
+        assert_eq!(registered.len(), 2);
     }
 }

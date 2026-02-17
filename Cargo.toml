@@ -8,7 +8,7 @@ members = [
     "crates/otter-messaging",
     "crates/otter-storage",
     "crates/otter-voice",
-    "crates/otter-cli",
+    "crates/otter-cli", "crates/otter-gui",
 ]
 
 [workspace.package]
