@@ -39,8 +39,10 @@ pub enum CryptoError {
 }
 
 /// Encrypted message envelope with replay protection
+/// 
+/// Note: deny_unknown_fields is not used to maintain forward compatibility
+/// in a distributed P2P network where peers may run different versions.
 #[derive(Clone, Serialize, Deserialize, Debug)]
-#[serde(deny_unknown_fields)]
 pub struct EncryptedMessage {
     /// Nonce used for encryption (96 bits / 12 bytes)
     pub nonce: Vec<u8>,

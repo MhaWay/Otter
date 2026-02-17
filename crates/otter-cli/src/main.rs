@@ -27,7 +27,7 @@ use tracing_subscriber;
 #[command(about = "Privacy-focused decentralized chat platform", long_about = None)]
 #[command(version)]
 struct Cli {
-    /// Optional nickname for this peer
+    /// Optional nickname for this peer (display only - not propagated over network)
     #[arg(long)]
     nickname: Option<String>,
     
@@ -705,8 +705,10 @@ async fn send_message(
         debug!("Prepared encrypted message: {:?}", encrypted_msg);
         let data = encrypted_msg.to_bytes()?;
         debug!("Serialized to {} bytes", data.len());
-        debug!("First 32 bytes as hex: {}", hex::encode(&data[..data.len().min(32)]));
-        debug!("Enum tag (first byte): {}", data[0]);
+        if !data.is_empty() {
+            debug!("First 32 bytes as hex: {}", hex::encode(&data[..data.len().min(32)]));
+            debug!("Enum tag (first byte): {}", data[0]);
+        }
         
         drop(handler); // Release lock before sending
         
@@ -724,7 +726,9 @@ async fn send_message(
             
             // Send encrypted message via gossipsub (broadcast to all connected peers)
             // The encryption ensures only the intended recipient can decrypt it
-            let to = connected_peers[0].clone(); // Use first peer, gossipsub will broadcast
+            // NOTE: The 'to' parameter is currently ignored by gossipsub broadcast.
+            // All connected peers receive the message, but only the intended recipient can decrypt it.
+            let to = connected_peers[0].clone();
             
             if let Err(e) = command_tx
                 .send(NetworkCommand::SendMessage { to, data })

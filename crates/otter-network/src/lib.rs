@@ -113,7 +113,7 @@ impl Network {
         // Configure Gossipsub
         let gossipsub_config = gossipsub::ConfigBuilder::default()
             .heartbeat_interval(Duration::from_secs(10))
-            .validation_mode(gossipsub::ValidationMode::Permissive)  // Changed from Strict to allow testing
+            .validation_mode(gossipsub::ValidationMode::Strict)
             .build()
             .map_err(|e| NetworkError::InitializationError(e.to_string()))?;
         
@@ -150,9 +150,9 @@ impl Network {
         
         // Create swarm with custom config to prevent idle disconnections
         // Default idle_connection_timeout is 120 seconds (2 minutes) which causes unwanted disconnections
-        // We set it to 1 hour to keep connections alive longer
+        // Set to 10 minutes - balances resource usage with connection stability
         let swarm_config = libp2p::swarm::Config::with_tokio_executor()
-            .with_idle_connection_timeout(Duration::from_secs(3600)); // 1 hour
+            .with_idle_connection_timeout(Duration::from_secs(600)); // 10 minutes
         
         let swarm = Swarm::new(transport, behaviour, local_peer_id, swarm_config);
         
@@ -272,8 +272,8 @@ impl Network {
             }
             
             SwarmEvent::Behaviour(OtterBehaviourEvent::Gossipsub(event)) => {
-                // Log any other gossipsub events (validation failures, etc.)
-                warn!("Unhandled gossipsub event: {:?}", event);
+                // Log any other gossipsub events (validation failures, etc.) at debug level
+                debug!("Unhandled gossipsub event: {:?}", event);
             }
             
             SwarmEvent::ConnectionEstablished { peer_id, .. } => {
@@ -307,13 +307,15 @@ impl Network {
     async fn handle_command(&mut self, command: NetworkCommand) -> Result<(), NetworkError> {
         match command {
             NetworkCommand::SendMessage { to, data } => {
-                debug!("Sending message to peer: {} (size: {} bytes)", to, data.len());
+                // NOTE: 'to' parameter is currently ignored - gossipsub broadcasts to all subscribers.
+                // E2E encryption ensures only the intended recipient can decrypt the message.
+                debug!("Broadcasting message (intended for: {}, size: {} bytes)", to, data.len());
                 
                 // Publish to gossipsub topic
                 match self.swarm
                     .behaviour_mut()
                     .gossipsub
-                    .publish(self.gossipsub_topic.clone(), data.clone())
+                    .publish(self.gossipsub_topic.clone(), data)
                 {
                     Ok(message_id) => {
                         debug!("Published message to gossipsub, message_id: {:?}", message_id);

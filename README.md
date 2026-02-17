@@ -84,7 +84,7 @@ Otter is built as a Rust workspace with eight core crates:
   - ChaCha20-Poly1305 (encryption)
   - BLAKE3 (hashing)
 - **Async Runtime**: Tokio
-- **Serialization**: MessagePack (rmp-serde) for binary messages, JSON for human-readable data
+- **Serialization**: MessagePack (rmp-serde) for all protocol messages and encrypted data
 
 ## Getting Started
 
@@ -252,7 +252,7 @@ Otter is designed to protect against:
 ### Limitations
 
 - **Metadata privacy**: Network-level metadata (IP addresses, connection timing) is visible to network observers
-- **Forward secrecy**: Current implementation uses static session keys (PFS planned)
+- **Forward secrecy**: Current implementation uses `CryptoSession` with static session keys. `PFSSession` with ephemeral key exchange is implemented but not yet integrated into the messaging layer
 - **Peer discovery**: mDNS reveals presence on local network
 - **Message persistence**: Message history not yet implemented
 - **Group encryption**: Currently supports only 1-to-1 encrypted conversations
