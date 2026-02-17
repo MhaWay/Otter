@@ -224,6 +224,7 @@ impl GuiApp {
         )
             .padding([8, 5])
             .width(Length::Fixed(280.0))
+            .clip(true)
             .on_press(Message::TryLogin);
 
         let register_btn = Button::new(
@@ -237,6 +238,7 @@ impl GuiApp {
         )
             .padding([8, 5])
             .width(Length::Fixed(280.0))
+            .clip(true)
             .on_press(Message::StartRegister);
 
         let content = Column::new()
@@ -326,6 +328,7 @@ Scorrendo verso il basso e facendo clic su \"Accetto\", riconosci che:\n\
             )
                 .padding([8, 5])
                 .width(Length::Fixed(320.0))
+                .clip(true)
                 .on_press(Message::DisclaimerAccepted)
                 .into()
         } else {
@@ -340,6 +343,7 @@ Scorrendo verso il basso e facendo clic su \"Accetto\", riconosci che:\n\
             )
                 .padding([8, 5])
                 .width(Length::Fixed(320.0))
+                .clip(true)
                 .into()
         };
 
@@ -354,6 +358,7 @@ Scorrendo verso il basso e facendo clic su \"Accetto\", riconosci che:\n\
         )
             .padding([8, 5])
             .width(Length::Fixed(140.0))
+            .clip(true)
             .on_press(Message::BackToHome)
             .into();
 
@@ -399,6 +404,7 @@ Scorrendo verso il basso e facendo clic su \"Accetto\", riconosci che:\n\
         )
             .padding([8, 5])
             .width(Length::Fixed(300.0))
+            .clip(true)
             .on_press(Message::NicknameSubmit);
 
         let back_button = Button::new(
@@ -412,6 +418,7 @@ Scorrendo verso il basso e facendo clic su \"Accetto\", riconosci che:\n\
         )
             .padding([8, 5])
             .width(Length::Fixed(140.0))
+            .clip(true)
             .on_press(Message::BackToHome);
 
         let button_row = Row::new()
@@ -481,6 +488,7 @@ Funzionalità in sviluppo:\n\
             .height(Length::Fill)
         )
             .padding([8, 5])
+            .clip(true)
             .on_press(Message::Logout);
 
         let content = Column::new()
