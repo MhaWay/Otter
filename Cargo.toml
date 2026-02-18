@@ -76,6 +76,10 @@ uuid = { version = "1.6", features = ["v4", "serde"] }
 async-trait = "0.1"
 tempfile = "3.8"
 
+# Force unified windows-core version
+windows = "0.58"
+windows-core = "0.58"
+
 [profile.release]
 opt-level = 3
 lto = true
