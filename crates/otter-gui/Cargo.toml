@@ -13,8 +13,8 @@ name = "otter"
 path = "src/main.rs"
 
 [dependencies]
-iced = { version = "0.14", features = ["tokio"] }
-tokio = { workspace = true }
+iced = { version = "0.14", features = ["tokio", "svg"] }
+tokio = { workspace = true, features = ["rt", "sync"] }
 tracing = { workspace = true }
 blake3 = { workspace = true }
 serde_json = { workspace = true }
@@ -22,3 +22,8 @@ serde = { workspace = true }
 uuid = { version = "1.6", features = ["v4", "serde"] }
 dirs = "6.0"
 anyhow = "1.0"
+oauth2 = "4.4"
+reqwest = { version = "0.11", features = ["json"] }
+url = "2.5"
+base64 = "0.22"
+open = "5.0"
