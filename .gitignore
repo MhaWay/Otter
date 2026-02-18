@@ -16,6 +16,9 @@ Cargo.lock
 identity*.json
 *.key
 
+# Configuration (contains OAuth secrets)
+config.toml
+
 # Logs
 *.log
 
