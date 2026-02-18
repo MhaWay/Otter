@@ -35,6 +35,12 @@
 # Theme (currently only "default" is supported)
 # theme = "default"
 
+[oauth]
+# Google OAuth2 credentials for GUI authentication
+# Get these from: https://console.cloud.google.com/apis/credentials
+# client_id = "YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com"
+# client_secret = "YOUR_GOOGLE_CLIENT_SECRET"
+
 # NOTE: This config file format is a placeholder for future features.
 # Currently, most settings are controlled via command-line flags.
 # See: otter --help
