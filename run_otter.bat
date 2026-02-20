@@ -7,6 +7,20 @@ echo      Otter - Decentralized Private Chat
 echo ================================================
 echo.
 
+REM Load environment variables from .env file if it exists
+if exist .env (
+    echo Loading environment variables from .env...
+    for /f "delims== tokens=1,2" %%A in ('.env') do (
+        if not "%%A"==" " if not "%%A:~0,1%% "=="#" set "%%A=%%B"
+    )
+) else (
+    echo Note: .env file not found. If you need to use Google OAuth, please:
+    echo   1. Copy .env.example to .env
+    echo   2. Add your Google OAuth credentials
+    echo   See SETUP_OAUTH.md for instructions.
+    echo.
+)
+
 REM Check if otter.exe exists
 if exist otter.exe (
     echo Found otter.exe

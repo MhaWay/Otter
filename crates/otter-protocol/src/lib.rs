@@ -96,10 +96,33 @@ impl Handshake {
         }
     }
     
+    /// Create a handshake with peer_id and nickname (recommended for contact discovery)
+    pub fn new_with_info(
+        identity: PublicIdentity,
+        capabilities: Vec<Capability>,
+        peer_id: String,
+        nickname: String,
+    ) -> Self {
+        let mut handshake = Self::new(identity, capabilities);
+        handshake.metadata.insert("peer_id".to_string(), peer_id);
+        handshake.metadata.insert("nickname".to_string(), nickname);
+        handshake
+    }
+    
     /// Add metadata to the handshake
     pub fn with_metadata(mut self, key: String, value: String) -> Self {
         self.metadata.insert(key, value);
         self
+    }
+    
+    /// Get peer_id from metadata
+    pub fn get_peer_id(&self) -> Option<&String> {
+        self.metadata.get("peer_id")
+    }
+    
+    /// Get nickname from metadata
+    pub fn get_nickname(&self) -> Option<&String> {
+        self.metadata.get("nickname")
     }
     
     /// Check if a capability is supported
@@ -217,6 +240,66 @@ pub struct ProtocolMessage {
     pub timestamp: DateTime<Utc>,
 }
 
+/// User profile information for detailed peer discovery
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserProfile {
+    /// Peer ID
+    pub peer_id: String,
+    
+    /// Display nickname
+    pub nickname: String,
+    
+    /// Optional status message
+    pub status: Option<String>,
+    
+    /// Optional avatar image (base64 encoded or hash)
+    pub avatar: Option<String>,
+    
+    /// Optional bio/description
+    pub bio: Option<String>,
+    
+    /// Online status
+    pub is_online: bool,
+    
+    /// Last seen timestamp (if user allows sharing)
+    pub last_seen: Option<DateTime<Utc>>,
+    
+    /// Custom fields
+    pub custom_fields: HashMap<String, String>,
+}
+
+impl UserProfile {
+    /// Create a basic profile with peer_id and nickname
+    pub fn new(peer_id: String, nickname: String) -> Self {
+        Self {
+            peer_id,
+            nickname,
+            status: None,
+            avatar: None,
+            bio: None,
+            is_online: true,
+            last_seen: Some(Utc::now()),
+            custom_fields: HashMap::new(),
+        }
+    }
+    
+    /// Add optional fields
+    pub fn with_status(mut self, status: String) -> Self {
+        self.status = Some(status);
+        self
+    }
+    
+    pub fn with_avatar(mut self, avatar: String) -> Self {
+        self.avatar = Some(avatar);
+        self
+    }
+    
+    pub fn with_bio(mut self, bio: String) -> Self {
+        self.bio = Some(bio);
+        self
+    }
+}
+
 /// Message payload types
 /// 
 /// NOTE: Uses default externally-tagged enum format for MessagePack compatibility.
@@ -245,6 +328,34 @@ pub enum MessagePayload {
     
     /// Protocol upgrade request
     ProtocolUpgrade { target_version: u32 },
+    
+    /// Request detailed profile information
+    ProfileRequest { requested_peer_id: String },
+    
+    /// Response with detailed profile
+    ProfileResponse { profile: UserProfile },
+    
+    /// Request to add as contact/friend
+    ContactRequest {
+        /// Requester's peer_id
+        from_peer_id: String,
+        /// Requester's nickname
+        from_nickname: String,
+        /// Optional introduction message
+        message: Option<String>,
+    },
+    
+    /// Response to contact request
+    ContactResponse {
+        /// Whether the request was accepted
+        accepted: bool,
+        /// Responder's peer_id
+        peer_id: String,
+        /// Responder's nickname (if accepted)
+        nickname: Option<String>,
+        /// Optional message
+        message: Option<String>,
+    },
 }
 
 impl ProtocolMessage {
@@ -588,6 +699,57 @@ mod tests {
         let handshake = Handshake::new(public, vec![Capability::TextMessaging]);
         
         assert!(handshake.is_compatible().is_err());
+    }
+    
+    #[test]
+    fn test_handshake_with_info() {
+        let identity = Identity::generate().unwrap();
+        let public = PublicIdentity::from_identity(&identity);
+        
+        let handshake = Handshake::new_with_info(
+            public,
+            vec![Capability::E2EEncryption, Capability::TextMessaging],
+            "peer123".to_string(),
+            "Mario".to_string(),
+        );
+        
+        assert_eq!(handshake.get_peer_id(), Some(&"peer123".to_string()));
+        assert_eq!(handshake.get_nickname(), Some(&"Mario".to_string()));
+        assert!(handshake.is_compatible().is_ok());
+    }
+    
+    #[test]
+    fn test_user_profile_creation() {
+        let profile = UserProfile::new("peer456".to_string(), "Alice".to_string())
+            .with_status("Disponibile".to_string())
+            .with_bio("Developer @ Otter".to_string());
+        
+        assert_eq!(profile.peer_id, "peer456");
+        assert_eq!(profile.nickname, "Alice");
+        assert_eq!(profile.status, Some("Disponibile".to_string()));
+        assert_eq!(profile.bio, Some("Developer @ Otter".to_string()));
+        assert!(profile.is_online);
+    }
+    
+    #[test]
+    fn test_contact_request_message() {
+        let request = MessagePayload::ContactRequest {
+            from_peer_id: "peer123".to_string(),
+            from_nickname: "Mario".to_string(),
+            message: Some("Ciao, ti vorrei aggiungere!".to_string()),
+        };
+        
+        let msg = ProtocolMessage::new(request);
+        assert_eq!(msg.version, PROTOCOL_VERSION);
+        
+        // Test serialization
+        if let MessagePayload::ContactRequest { from_peer_id, from_nickname, message } = msg.payload {
+            assert_eq!(from_peer_id, "peer123");
+            assert_eq!(from_nickname, "Mario");
+            assert!(message.is_some());
+        } else {
+            panic!("Expected ContactRequest payload");
+        }
     }
     
     #[test]

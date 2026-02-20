@@ -18,6 +18,7 @@ identity*.json
 
 # Configuration (contains OAuth secrets)
 config.toml
+.env
 
 # Logs
 *.log

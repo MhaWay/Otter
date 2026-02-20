@@ -7,6 +7,18 @@ echo "     Otter - Decentralized Private Chat"
 echo "================================================"
 echo
 
+# Load environment variables from .env file if it exists
+if [ -f ".env" ]; then
+    echo "Loading environment variables from .env..."
+    export $(cat .env | grep -v '^#' | xargs)
+else
+    echo "Note: .env file not found. If you need to use Google OAuth, please:"
+    echo "  1. Copy .env.example to .env"
+    echo "  2. Add your Google OAuth credentials"
+    echo "  See SETUP_OAUTH.md for instructions."
+    echo
+fi
+
 # Check if otter binary exists
 if [ -f "./otter" ]; then
     echo "✓ Found otter binary"
