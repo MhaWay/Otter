@@ -33,3 +33,6 @@ test-output/
 # Temporary files
 /tmp/
 *.tmp
+
+# OAuth server scripts (deploy manually to ggally.net)
+oauth/

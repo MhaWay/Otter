@@ -13,11 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH, Duration};
-use oauth2::{
-    AuthorizationCode, AuthUrl, ClientId, ClientSecret, CsrfToken,
-    PkceCodeChallenge, RedirectUrl, Scope, TokenResponse, TokenUrl,
-    basic::BasicClient, reqwest::async_http_client,
-};
+use oauth2::PkceCodeChallenge;
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
 use tokio::sync::mpsc;
@@ -35,8 +31,8 @@ static NETWORK_EVENTS: Lazy<(mpsc::UnboundedSender<NetworkEvent>, Arc<TokioMutex
         (tx, Arc::new(TokioMutex::new(rx)))
     });
 
-// OAuth credentials loaded from environment variables
-// Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET environment variables
+// OAuth proxy endpoint (server-side credentials on ggally.net)
+const OAUTH_PROXY_URL: &str = "https://ggally.net/oauth";
 const REDIRECT_URI: &str = "http://localhost:8080";
 
 const ROBOTO_FONT: Font = Font::with_name("Roboto");
@@ -741,55 +737,54 @@ impl GuiApp {
     }
 
     async fn perform_google_auth() -> Result<GoogleAuthData, String> {
-        // Load OAuth credentials from environment variables (.env file)
-        let client_id = std::env::var("GOOGLE_CLIENT_ID")
-            .unwrap_or_else(|_| {
-                // Public Client ID - safe to distribute in app
-                "251946123352-bp2baikvt4817semo2d541dd2ffov6lk.apps.googleusercontent.com".to_string()
-            });
-        
-        let client_secret = std::env::var("GOOGLE_CLIENT_SECRET")
-            .map_err(|_| "Google OAuth non configurato. Copia .env.example in .env e aggiungi GOOGLE_CLIENT_SECRET.".to_string())?;
-        
-        tracing::info!("Usando Client ID: {}", client_id);
-        
-        // Valida che il Client ID sia stato configurato
-        if client_id.contains("YOUR_CLIENT_ID") {
-            return Err("Google OAuth non configurato. Vedi OAUTH_SETUP.md per istruzioni.".to_string());
+        #[derive(Serialize)]
+        struct AuthUrlRequest {
+            code_verifier: String,
         }
-        
-        // Create OAuth2 client (PKCE + ClientSecret for installed apps)
-        let client = BasicClient::new(
-            ClientId::new(client_id),
-            Some(ClientSecret::new(client_secret)),  // Required for installed apps
-            AuthUrl::new("https://accounts.google.com/o/oauth2/v2/auth".to_string())
-                .map_err(|e| format!("Invalid auth URL: {}", e))?,
-            Some(TokenUrl::new("https://oauth2.googleapis.com/token".to_string())
-                .map_err(|e| format!("Invalid token URL: {}", e))?)
-        )
-        .set_redirect_uri(
-            RedirectUrl::new(REDIRECT_URI.to_string())
-                .map_err(|e| format!("Invalid redirect URL: {}", e))?
-        );
 
-        // Generate PKCE challenge
-        let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
-        tracing::debug!("PKCE challenge generato con successo");
+        #[derive(Deserialize)]
+        struct AuthUrlResponse {
+            auth_url: String,
+            csrf_token: String,
+        }
 
-        // Generate authorization URL
-        let (auth_url, csrf_token) = client
-            .authorize_url(CsrfToken::new_random)
-            .add_scope(Scope::new("https://www.googleapis.com/auth/userinfo.email".to_string()))
-            .add_scope(Scope::new("https://www.googleapis.com/auth/userinfo.profile".to_string()))
-            .add_scope(Scope::new("https://www.googleapis.com/auth/drive.file".to_string()))
-            .add_scope(Scope::new("openid".to_string()))
-            .set_pkce_challenge(pkce_challenge)
-            .url();
-        
-        tracing::info!("Auth URL generato: {}", auth_url.as_str());
+        #[derive(Serialize)]
+        struct TokenRequest {
+            code: String,
+            code_verifier: String,
+        }
+
+        #[derive(Deserialize)]
+        struct TokenResponseProxy {
+            access_token: String,
+        }
+
+        #[derive(Serialize)]
+        struct UserInfoRequest {
+            access_token: String,
+        }
+
+        // Generate PKCE verifier (server will create the challenge)
+        let (_pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
+        tracing::debug!("PKCE verifier generato con successo");
+
+        // Request auth URL from proxy
+        let auth_url_response = reqwest::Client::new()
+            .post(format!("{}/auth-url.php", OAUTH_PROXY_URL))
+            .json(&AuthUrlRequest {
+                code_verifier: pkce_verifier.secret().to_string(),
+            })
+            .send()
+            .await
+            .map_err(|e| format!("Errore richiesta auth URL: {}", e))?
+            .json::<AuthUrlResponse>()
+            .await
+            .map_err(|e| format!("Errore parsing auth URL: {}", e))?;
+
+        tracing::info!("Auth URL ricevuto dal proxy");
 
         // Open browser for user authentication
-        if let Err(e) = open::that(auth_url.as_str()) {
+        if let Err(e) = open::that(auth_url_response.auth_url.as_str()) {
             return Err(format!("Impossibile aprire il browser: {}", e));
         }
 
@@ -821,12 +816,12 @@ impl GuiApp {
                         .find(|(key, _)| key == "state")
                         .ok_or("CSRF token non trovato")?;
 
-                    code = AuthorizationCode::new(code_pair.1.into_owned());
-                    state = CsrfToken::new(state_pair.1.into_owned());
+                    code = code_pair.1.into_owned();
+                    state = state_pair.1.into_owned();
                 }
 
                 // Verify CSRF token
-                if state.secret() != csrf_token.secret() {
+                if state != auth_url_response.csrf_token {
                     return Err("CSRF token non valido".to_string());
                 }
 
@@ -841,26 +836,29 @@ impl GuiApp {
         };
 
         // Exchange code for token
-        tracing::info!("Effettuo scambio token con Google...");
-        tracing::debug!("Authorization code: {}", code.secret());
-        
-        let token_result = client
-            .exchange_code(code)
-            .set_pkce_verifier(pkce_verifier)
-            .request_async(async_http_client)
+        tracing::info!("Effettuo scambio token via proxy...");
+
+        let token_response = reqwest::Client::new()
+            .post(format!("{}/token.php", OAUTH_PROXY_URL))
+            .json(&TokenRequest {
+                code,
+                code_verifier: pkce_verifier.secret().to_string(),
+            })
+            .send()
             .await
-            .map_err(|e| {
-                let error_msg = format!("Errore scambio token: {:?}", e);
-                tracing::error!("{}", error_msg);
-                error_msg
-            })?;
-        
+            .map_err(|e| format!("Errore scambio token: {}", e))?
+            .json::<TokenResponseProxy>()
+            .await
+            .map_err(|e| format!("Errore parsing token: {}", e))?;
+
         tracing::info!("Token ricevuto con successo");
 
-        // Get user info using access token
+        // Get user info via proxy
         let user_info = reqwest::Client::new()
-            .get("https://www.googleapis.com/oauth2/v2/userinfo")
-            .bearer_auth(token_result.access_token().secret())
+            .post(format!("{}/userinfo.php", OAUTH_PROXY_URL))
+            .json(&UserInfoRequest {
+                access_token: token_response.access_token.clone(),
+            })
             .send()
             .await
             .map_err(|e| format!("Errore richiesta info utente: {}", e))?
@@ -872,7 +870,7 @@ impl GuiApp {
             email: user_info["email"].as_str().unwrap_or("unknown").to_string(),
             name: user_info["name"].as_str().unwrap_or("User").to_string(),
             picture_url: user_info["picture"].as_str().map(|s| s.to_string()),
-            access_token: token_result.access_token().secret().to_string(),
+            access_token: token_response.access_token,
         })
     }
 
