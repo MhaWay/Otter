@@ -305,9 +305,17 @@ impl GuiApp {
         let mut app = GuiApp::default();
         if let Some(identity) = GuiApp::load_identity() {
             app.user_identity = Some(identity);
-            app.current_screen = Screen::MainApp;
-            // Avvia la rete P2P
-            return (app, Self::start_network_task());
+            // Tenta Google auth in background (opzionale)
+            return (app, Task::perform(
+                GuiApp::perform_google_auth(),
+                |result| match result {
+                    Ok(data) => Message::LoginGoogleAuthSuccess(data),
+                    Err(e) => {
+                        tracing::warn!("Google auth fallito all'avvio: {}", e);
+                        Message::NetworkStartInit
+                    }
+                }
+            ));
         } else {
             app.current_screen = Screen::Home;
         }
