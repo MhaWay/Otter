@@ -935,8 +935,24 @@ impl GuiApp {
                     return Err("CSRF token non valido".to_string());
                 }
 
-                // Send success response to browser
-                let response = "HTTP/1.1 200 OK\r\ncontent-type: text/html\r\n\r\n<html><body><h1>✅ Autenticazione completata!</h1><p>Puoi chiudere questa finestra e tornare all'applicazione.</p></body></html>";
+                // Send success response to browser with dark theme
+                let response = "HTTP/1.1 200 OK\r\ncontent-type: text/html\r\n\r\n\
+                    <html>\
+                    <head><meta charset='utf-8'><style>\
+                    body{margin:0;padding:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0f0f11;color:#e0e0e0;font-family:system-ui,-apple-system,sans-serif}\
+                    .container{text-align:center;padding:2rem}\
+                    h1{font-size:2.5rem;margin:0 0 1rem 0;color:#4CAF50}\
+                    p{font-size:1.2rem;color:#b0b0b0;margin:0}\
+                    .emoji{font-size:4rem;margin-bottom:1rem}\
+                    </style></head>\
+                    <body>\
+                    <div class='container'>\
+                    <div class='emoji'>🦦</div>\
+                    <h1>Autenticazione completata!</h1>\
+                    <p>Puoi chiudere questa finestra e tornare all'app</p>\
+                    </div>\
+                    </body>\
+                    </html>";
                 stream.write_all(response.as_bytes())
                     .map_err(|e| format!("Errore invio risposta: {}", e))?;
 
