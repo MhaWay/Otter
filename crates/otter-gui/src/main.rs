@@ -2302,23 +2302,36 @@ Scorrendo verso il basso e facendo clic su \"Accetto\", riconosci che:\n\
         
         let spinner = self.create_spinner(100.0, "#6699ff");
         
-        // Area log per debug
-        let mut logs_column = Column::new().spacing(4);
-        let recent_logs: Vec<_> = self.loading_logs.iter().rev().take(8).rev().collect();
-        for log in recent_logs {
+        // Area log per debug - più larga e leggibile
+        let mut logs_column = Column::new().spacing(6).padding(10);
+        let recent_logs: Vec<_> = self.loading_logs.iter().rev().take(10).rev().collect();
+        
+        if recent_logs.is_empty() {
             logs_column = logs_column.push(
-                Text::new(log)
-                    .size(12)
+                Text::new("In attesa eventi di rete...")
+                    .size(14)
                     .font(ROBOTO_FONT)
                     .color([0.5, 0.5, 0.5])
             );
+        } else {
+            for log in recent_logs {
+                logs_column = logs_column.push(
+                    Text::new(log)
+                        .size(14)
+                        .font(ROBOTO_FONT)
+                        .color([0.8, 0.8, 0.8])
+                        .shaping(text::Shaping::Advanced)
+                );
+            }
         }
         
         let logs_container = Container::new(
             Scrollable::new(logs_column)
-                .height(Length::Fixed(150.0))
+                .height(Length::Fixed(220.0))
+                .width(Length::Fill)
         )
-        .padding(10)
+        .width(Length::Fixed(700.0))
+        .padding(15)
         .style(|_theme| {
             container::Style {
                 background: Some(Background::Color(Color::from_rgb(0.08, 0.08, 0.10))),
