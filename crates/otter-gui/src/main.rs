@@ -1400,13 +1400,8 @@ impl GuiApp {
                         self.network_command_tx = Some(cmd_tx.clone());
                         tracing::info!("Rete P2P avviata con successo");
                         
-                        // Mostra "Initializing" per 700ms prima di passare a ListeningStarted
-                        return Task::perform(
-                            async {
-                                tokio::time::sleep(tokio::time::Duration::from_millis(700)).await;
-                            },
-                            |_| Message::UpdateLoadingStatus(LoadingStatus::ListeningStarted)
-                        );
+                        // Passa subito a ListeningStarted
+                        return Task::done(Message::UpdateLoadingStatus(LoadingStatus::ListeningStarted));
                     }
                     Err(e) => {
                         tracing::error!("Errore avvio rete P2P: {}", e);
@@ -1419,15 +1414,10 @@ impl GuiApp {
                 match event {
                     NetworkEvent::ListeningOn { address } => {
                         tracing::info!("Network in ascolto su: {}", address);
-                        // Aggiorna stato: bootstrap connecting (con delay per visualizzazione)
+                        // Passa subito a BootstrapConnecting
                         if self.loading_status == LoadingStatus::Initializing || 
                            self.loading_status == LoadingStatus::ListeningStarted {
-                            return Task::perform(
-                                async {
-                                    tokio::time::sleep(tokio::time::Duration::from_millis(800)).await;
-                                },
-                                |_| Message::UpdateLoadingStatus(LoadingStatus::BootstrapConnecting)
-                            );
+                            return Task::done(Message::UpdateLoadingStatus(LoadingStatus::BootstrapConnecting));
                         }
                     }
                     NetworkEvent::PeerDiscovered { peer_id, addresses } => {
@@ -1461,16 +1451,11 @@ impl GuiApp {
                     NetworkEvent::PeerConnected { peer_id } => {
                         tracing::info!("Peer connesso: {}", peer_id);
                         
-                        // Aggiorna stato: bootstrap completed (prima connessione, con delay)
+                        // Aggiorna stato: bootstrap completed (prima connessione)
                         if self.loading_status == LoadingStatus::BootstrapConnecting {
                             // Reset retry counter quando connessione ha successo
                             self.loading_retry_count = 0;
-                            return Task::perform(
-                                async {
-                                    tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
-                                },
-                                |_| Message::UpdateLoadingStatus(LoadingStatus::BootstrapCompleted)
-                            );
+                            return Task::done(Message::UpdateLoadingStatus(LoadingStatus::BootstrapCompleted));
                         }
                         
                         // Aggiorna stato online del peer
@@ -1595,12 +1580,7 @@ impl GuiApp {
                             );
                             self.loading_retry_count = 0; // Reset per eventuali usi futuri
                             
-                            return Task::perform(
-                                async {
-                                    tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
-                                },
-                                |_| Message::UpdateLoadingStatus(LoadingStatus::BootstrapCompleted)
-                            );
+                            return Task::done(Message::UpdateLoadingStatus(LoadingStatus::BootstrapCompleted));
                         }
                     }
                     LoadingStatus::BootstrapCompleted => {
@@ -1626,16 +1606,8 @@ impl GuiApp {
                                 }) {
                                     tracing::info!("Identity message inviato per: {}", identity.nickname);
                                     
-                                    // Passa subito a SendingIdentity, poi dopo 1.5s a Ready
-                                    return Task::batch([
-                                        Task::done(Message::UpdateLoadingStatus(LoadingStatus::SendingIdentity)),
-                                        Task::perform(
-                                            async {
-                                                tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
-                                            },
-                                            |_| Message::UpdateLoadingStatus(LoadingStatus::Ready)
-                                        )
-                                    ]);
+                                    // Passa direttamente a Ready
+                                    return Task::done(Message::UpdateLoadingStatus(LoadingStatus::Ready));
                                 }
                             }
                         }
