@@ -228,6 +228,7 @@ struct GuiApp {
     spinner_frame: usize,
     loading_status: LoadingStatus,  // Stato del caricamento rete
     loading_retry_count: u32,  // Contatore tentativi per fase corrente
+    loading_logs: Vec<String>,  // Log per debug fase caricamento
     current_tab: MainAppTab,
     sidebar_expanded: bool,
     sidebar_width: f32,
@@ -263,6 +264,7 @@ impl Default for GuiApp {
             spinner_frame: 0,
             loading_status: LoadingStatus::Initializing,
             loading_retry_count: 0,
+            loading_logs: Vec::new(),
             current_tab: MainAppTab::Home,
             sidebar_expanded: false,
             sidebar_width: 240.0,
@@ -1399,6 +1401,7 @@ impl GuiApp {
                     Ok(cmd_tx) => {
                         self.network_command_tx = Some(cmd_tx.clone());
                         tracing::info!("Rete P2P avviata con successo");
+                        self.loading_logs.push("✓ Rete P2P avviata".to_string());
                         
                         // Passa subito a ListeningStarted
                         return Task::done(Message::UpdateLoadingStatus(LoadingStatus::ListeningStarted));
@@ -1414,9 +1417,11 @@ impl GuiApp {
                 match event {
                     NetworkEvent::ListeningOn { address } => {
                         tracing::info!("Network in ascolto su: {}", address);
+                        self.loading_logs.push(format!("✓ In ascolto su {}", address));
                         // Passa subito a BootstrapConnecting
                         if self.loading_status == LoadingStatus::Initializing || 
                            self.loading_status == LoadingStatus::ListeningStarted {
+                            self.loading_logs.push("→ Avvio connessione bootstrap...".to_string());
                             return Task::done(Message::UpdateLoadingStatus(LoadingStatus::BootstrapConnecting));
                         }
                     }
@@ -1450,11 +1455,14 @@ impl GuiApp {
                     }
                     NetworkEvent::PeerConnected { peer_id } => {
                         tracing::info!("Peer connesso: {}", peer_id);
+                        let peer_short = format!("{}...{}", &peer_id.to_string()[..8], &peer_id.to_string()[peer_id.to_string().len()-6..]);
+                        self.loading_logs.push(format!("✓ Peer connesso: {}", peer_short));
                         
                         // Aggiorna stato: bootstrap completed (prima connessione)
                         if self.loading_status == LoadingStatus::BootstrapConnecting {
                             // Reset retry counter quando connessione ha successo
                             self.loading_retry_count = 0;
+                            self.loading_logs.push("✓ Bootstrap completato!".to_string());
                             return Task::done(Message::UpdateLoadingStatus(LoadingStatus::BootstrapCompleted));
                         }
                         
@@ -1466,6 +1474,8 @@ impl GuiApp {
                     }
                     NetworkEvent::PeerDisconnected { peer_id } => {
                         tracing::info!("Peer disconnesso: {}", peer_id);
+                        let peer_short = format!("{}...{}", &peer_id.to_string()[..8], &peer_id.to_string()[peer_id.to_string().len()-6..]);
+                        self.loading_logs.push(format!("✗ Peer disconnesso: {}", peer_short));
                         // Aggiorna stato offline del peer
                         if let Some(peer) = self.discovered_peers.iter_mut().find(|p| p.peer_id == peer_id.to_string()) {
                             peer.is_online = false;
@@ -1565,6 +1575,7 @@ impl GuiApp {
                                 "Bootstrap tentativo {}/3 - in attesa connessione peer...", 
                                 self.loading_retry_count
                             );
+                            self.loading_logs.push(format!("⚠ Tentativo {}/3 - timeout, riprovo...", self.loading_retry_count));
                             
                             return Task::perform(
                                 async {
@@ -1578,6 +1589,7 @@ impl GuiApp {
                                 "Bootstrap fallito dopo {} tentativi - prosegue in modalità degradata", 
                                 self.loading_retry_count
                             );
+                            self.loading_logs.push("✗ Bootstrap fallito - modalità degradata".to_string());
                             self.loading_retry_count = 0; // Reset per eventuali usi futuri
                             
                             return Task::done(Message::UpdateLoadingStatus(LoadingStatus::BootstrapCompleted));
@@ -1605,6 +1617,7 @@ impl GuiApp {
                                     data: msg_bytes,
                                 }) {
                                     tracing::info!("Identity message inviato per: {}", identity.nickname);
+                                    self.loading_logs.push(format!("✓ Identity inviata: {}", identity.nickname));
                                     
                                     // Passa direttamente a Ready
                                     return Task::done(Message::UpdateLoadingStatus(LoadingStatus::Ready));
@@ -2289,6 +2302,31 @@ Scorrendo verso il basso e facendo clic su \"Accetto\", riconosci che:\n\
         
         let spinner = self.create_spinner(100.0, "#6699ff");
         
+        // Area log per debug
+        let mut logs_column = Column::new().spacing(4);
+        let recent_logs: Vec<_> = self.loading_logs.iter().rev().take(8).rev().collect();
+        for log in recent_logs {
+            logs_column = logs_column.push(
+                Text::new(log)
+                    .size(12)
+                    .font(ROBOTO_FONT)
+                    .color([0.5, 0.5, 0.5])
+            );
+        }
+        
+        let logs_container = Container::new(
+            Scrollable::new(logs_column)
+                .height(Length::Fixed(150.0))
+        )
+        .padding(10)
+        .style(|_theme| {
+            container::Style {
+                background: Some(Background::Color(Color::from_rgb(0.08, 0.08, 0.10))),
+                border: Border::default().rounded(8).color(Color::from_rgb(0.2, 0.2, 0.22)).width(1),
+                ..Default::default()
+            }
+        });
+        
         let content = Column::new()
             .push(Space::new().height(Length::Fill))
             .push(title)
@@ -2296,6 +2334,8 @@ Scorrendo verso il basso e facendo clic su \"Accetto\", riconosci che:\n\
             .push(status)
             .push(Space::new().height(Length::Fixed(40.0)))
             .push(spinner)
+            .push(Space::new().height(Length::Fixed(30.0)))
+            .push(logs_container)
             .push(Space::new().height(Length::Fill))
             .padding(40)
             .width(Length::Fill)
