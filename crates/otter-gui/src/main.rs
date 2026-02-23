@@ -18,6 +18,8 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
 use tokio::sync::mpsc;
 use otter_network::{bootstrap::BootstrapSources, NetworkEvent, NetworkCommand, Network, create_network_channels};
+use otter_messaging::Message as OtterMessage;
+use otter_identity::PublicIdentity as OtterPublicIdentity;
 use futures::stream;
 use std::sync::Arc;
 use tokio::sync::Mutex as TokioMutex;
@@ -118,6 +120,9 @@ enum Message {
     // Network events
     NetworkStarted(Result<mpsc::Sender<NetworkCommand>, String>),
     NetworkEvent(NetworkEvent),
+    NetworkReady,  // Network connesso e pronto
+    PeerIdentityReceived { peer_id: String, nickname: Option<String> },
+    NetworkStartInit,  // Inizio init della rete (dalla schermata Loading)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -176,6 +181,7 @@ enum Screen {
     GoogleAuth,
     ChooseNickname,
     Saving,
+    Loading,     // Connessione alla rete P2P
     MainApp,
 }
 
@@ -883,9 +889,21 @@ impl GuiApp {
                 // Try to load from local storage first
                 if let Some(identity) = GuiApp::load_identity() {
                     self.user_identity = Some(identity);
-                    self.current_screen = Screen::MainApp;
+                    // Prova a auth con Google (per salvare contatti su Drive)
+                    // Se fallisce, continua comunque con la rete
+                    return Task::perform(
+                        GuiApp::perform_google_auth(),
+                        |result| match result {
+                            Ok(data) => Message::LoginGoogleAuthSuccess(data),
+                            Err(e) => {
+                                tracing::warn!("Google auth fallito durante login: {}", e);
+                                // Comunque, procedi al loading della rete
+                                Message::NetworkStartInit
+                            }
+                        }
+                    );
                 } else {
-                    // No local identity, need to authenticate with Google
+                    // No local identity, need to authenticate with Google first
                     return Task::perform(
                         GuiApp::perform_google_auth(),
                         |result| match result {
@@ -896,31 +914,34 @@ impl GuiApp {
                 }
             }
             Message::LoginGoogleAuthSuccess(google_data) => {
-                // After successful Google auth, store auth data and try to load identity from Drive
+                // Store auth data
                 self.google_auth_data = Some(google_data.clone());
-                let access_token = google_data.access_token.clone();
-                return Task::perform(
-                    GuiApp::load_identity_from_drive(access_token),
-                    Message::LoginIdentityLoaded
-                );
+                
+                // Se non abbiamo un'identità locally salvata, prova a caricate da Drive
+                if self.user_identity.is_none() {
+                    let access_token = google_data.access_token.clone();
+                    return Task::perform(
+                        GuiApp::load_identity_from_drive(access_token),
+                        Message::LoginIdentityLoaded
+                    );
+                } else {
+                    // Abbiamo già l'identità locale, procedi al loading della rete
+                    return Task::done(Message::NetworkStartInit);
+                }
             }
             Message::LoginIdentityLoaded(result) => {
                 match result {
                     Ok(identity) => {
                         self.user_identity = Some(identity);
-                        self.current_screen = Screen::MainApp;
-                        self.auth_error = None;
-                        
-                        // Load contacts from Google Drive after successful identity load
-                        if let Some(auth_data) = &self.google_auth_data {
-                            let token = auth_data.access_token.clone();
-                            return Task::perform(
-                                Self::load_contacts_from_drive(token),
-                                Message::ContactsLoaded
-                            );
-                        }
+                        // Procedi al loading della rete
+                        return Task::done(Message::NetworkStartInit);
                     }
                     Err(e) => {
+                        tracing::warn!("Identity non trovata su Drive: {}", e);
+                        // Se c'è già local identity, usa quella
+                        if self.user_identity.is_some() {
+                            return Task::done(Message::NetworkStartInit);
+                        }
                         self.auth_error = Some(e);
                         self.current_screen = Screen::Home;
                     }
@@ -1012,7 +1033,7 @@ impl GuiApp {
                 match result {
                     Ok(identity) => {
                         self.user_identity = Some(identity);
-                        self.current_screen = Screen::MainApp;
+                        self.current_screen = Screen::Loading;
                         self.auth_error = None;
                         // Avvia la rete P2P
                         return Self::start_network_task();
@@ -1199,10 +1220,25 @@ impl GuiApp {
                     Ok(cmd_tx) => {
                         self.network_command_tx = Some(cmd_tx);
                         tracing::info!("Rete P2P avviata con successo");
+                        
+                        // Invia la propria Identity con nickname sulla rete
+                        if let Some(ref identity) = self.user_identity {
+                            // TODO: Implementare invio Identity message via gossipsub
+                            tracing::info!("Annunciando identity per: {}", identity.nickname);
+                        }
+                        
+                        // Attendi un momento per permettere connessioni, poi segna come pronto
+                        return Task::perform(
+                            async {
+                                tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+                            },
+                            |_| Message::NetworkReady
+                        );
                     }
                     Err(e) => {
                         tracing::error!("Errore avvio rete P2P: {}", e);
                         self.auth_error = Some(format!("Errore rete: {}", e));
+                        self.current_screen = Screen::Home;
                     }
                 }
             }
@@ -1255,11 +1291,73 @@ impl GuiApp {
                     NetworkEvent::ListeningOn { address } => {
                         tracing::info!("Network in ascolto su: {}", address);
                     }
+                    NetworkEvent::MessageReceived { from, data } => {
+                        tracing::debug!("Messaggio ricevuto da {}: {} bytes", from, data.len());
+                        
+                        // Prova a parsare come Message::Identity
+                        if let Ok(otter_msg) = OtterMessage::from_bytes(&data) {
+                            if let OtterMessage::Identity { public_identity, .. } = otter_msg {
+                                let peer_id_str = public_identity.peer_id().to_string();
+                                let nickname = public_identity.nickname().map(|s| s.to_string());
+                                
+                                tracing::info!("Identity parsata: {} con nickname: {:?}", peer_id_str, nickname);
+                                
+                                // Invia evento per aggiornare discovered_peers
+                                return Task::done(Message::PeerIdentityReceived {
+                                    peer_id: peer_id_str,
+                                    nickname,
+                                });
+                            }
+                        }
+                    }
                     _ => {
                         // Altri eventi di rete
                         tracing::debug!("Network event: {:?}", event);
                     }
                 }
+            }
+            
+            Message::NetworkReady => {
+                tracing::info!("Network pronto, passaggio a MainApp");
+                self.current_screen = Screen::MainApp;
+                
+                // Carica i contatti da Google Drive se disponibile
+                if let Some(auth_data) = &self.google_auth_data {
+                    let token = auth_data.access_token.clone();
+                    return Task::perform(
+                        Self::load_contacts_from_drive(token),
+                        Message::ContactsLoaded
+                    );
+                }
+            }
+            
+            Message::PeerIdentityReceived { peer_id, nickname } => {
+                tracing::info!("Identity ricevuta: {} ({})", peer_id, nickname.as_deref().unwrap_or("<no nickname>"));
+                
+                // Aggiungi ai discovered_peers se non già presente
+                if !self.discovered_peers.iter().any(|p| p.peer_id == peer_id) {
+                    self.discovered_peers.push(Contact {
+                        peer_id: peer_id.clone(),
+                        nickname: nickname.unwrap_or_else(|| peer_id[..8.min(peer_id.len())].to_string()),
+                        avatar: None,
+                        status: ContactStatus::Pending,
+                        last_seen: Some("Online ora".to_string()),
+                        is_online: true,
+                        discovered_at: Some(chrono::Utc::now().to_rfc3339()),
+                    });
+                    
+                    // Aggiorna risultati di ricerca se c'è una query attiva
+                    if !self.peer_search_query.is_empty() {
+                        self.peer_search_results = self.simulate_peer_search(&self.peer_search_query);
+                    }
+                }
+            }
+            
+            Message::NetworkStartInit => {
+                tracing::info!("Inizio inizializzazione rete P2P");
+                self.current_screen = Screen::Loading;
+                self.auth_error = None;
+                return Self::start_network_task();
             }
         }
         Task::none()
@@ -1365,12 +1463,8 @@ impl GuiApp {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        let spinner_sub = if self.current_screen == Screen::Saving {
-            time::every(Duration::from_millis(16))
-                .map(|_| Message::SpinnerTick)
-        } else {
-            Subscription::none()
-        };
+        let spinner_sub = time::every(Duration::from_millis(16))
+            .map(|_| Message::SpinnerTick);
         
         let mouse_sub = if self.is_dragging_sidebar {
             event::listen_with(|event, _status, _id| {
@@ -1389,7 +1483,7 @@ impl GuiApp {
         };
         
         // Network events subscription  
-        let network_sub = if self.current_screen == Screen::MainApp {
+        let network_sub = if self.current_screen == Screen::MainApp || self.current_screen == Screen::Loading {
             Subscription::run(|| {
                 stream::unfold((), |_| async {
                     // Leggi dal canale globale
@@ -1414,6 +1508,7 @@ impl GuiApp {
             Screen::GoogleAuth => self.view_google_auth(),
             Screen::ChooseNickname => self.view_choose_nickname(),
             Screen::Saving => self.view_saving(),
+            Screen::Loading => self.view_loading(),
             Screen::MainApp => self.view_main_app(),
         }
     }
@@ -1908,6 +2003,37 @@ Scorrendo verso il basso e facendo clic su \"Accetto\", riconosci che:\n\
         let content = Column::new()
             .push(Space::new().height(Length::Fill))
             .push(title)
+            .push(Space::new().height(Length::Fixed(40.0)))
+            .push(spinner)
+            .push(Space::new().height(Length::Fill))
+            .padding(40)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_x(Alignment::Center);
+
+        Container::new(content)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .center_x(Length::Fill)
+            .center_y(Length::Fill)
+            .into()
+    }
+
+    fn view_loading(&self) -> Element<Message> {
+        let title = Text::new("🌐 Connessione alla rete...").size(36).font(ROBOTO_FONT);
+        
+        let status = Text::new("Inizializzazione bootstrap e connessione ai peer")
+            .size(18)
+            .font(ROBOTO_FONT)
+            .color([0.7, 0.7, 0.7]);
+        
+        let spinner = self.create_spinner(100.0, "#6699ff");
+        
+        let content = Column::new()
+            .push(Space::new().height(Length::Fill))
+            .push(title)
+            .push(Space::new().height(Length::Fixed(20.0)))
+            .push(status)
             .push(Space::new().height(Length::Fixed(40.0)))
             .push(spinner)
             .push(Space::new().height(Length::Fill))

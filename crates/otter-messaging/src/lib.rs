@@ -126,6 +126,7 @@ impl Message {
 /// Manages conversations and encryption sessions with peers
 pub struct MessageHandler {
     local_identity: Identity,
+    local_nickname: Option<String>,
     peers: HashMap<String, PublicIdentity>,
     sessions: HashMap<String, CryptoSession>,
 }
@@ -135,9 +136,25 @@ impl MessageHandler {
     pub fn new(local_identity: Identity) -> Self {
         Self {
             local_identity,
+            local_nickname: None,
             peers: HashMap::new(),
             sessions: HashMap::new(),
         }
+    }
+    
+    /// Create a new message handler with nickname
+    pub fn new_with_nickname(local_identity: Identity, nickname: Option<String>) -> Self {
+        Self {
+            local_identity,
+            local_nickname: nickname,
+            peers: HashMap::new(),
+            sessions: HashMap::new(),
+        }
+    }
+    
+    /// Set or update the local nickname
+    pub fn set_nickname(&mut self, nickname: Option<String>) {
+        self.local_nickname = nickname;
     }
     
     /// Register a peer's public identity
@@ -158,7 +175,7 @@ impl MessageHandler {
     
     /// Get local public identity for sharing
     pub fn public_identity(&self) -> PublicIdentity {
-        PublicIdentity::from_identity(&self.local_identity)
+        PublicIdentity::from_identity_with_nickname(&self.local_identity, self.local_nickname.clone())
     }
     
     /// Encrypt and prepare a text message for a specific peer

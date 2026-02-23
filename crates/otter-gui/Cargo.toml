@@ -30,6 +30,8 @@ open = "5.0"
 dotenvy = "0.15"
 chrono = "0.4"
 otter-network = { path = "../otter-network" }
+otter-messaging = { path = "../otter-messaging" }
+otter-identity = { path = "../otter-identity" }
 otter-protocol = { path = "../otter-protocol" }
 libp2p = { workspace = true }
 futures = "0.3"

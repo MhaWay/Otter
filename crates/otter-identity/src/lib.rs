@@ -210,6 +210,8 @@ pub struct PublicIdentity {
     peer_id: PeerId,
     verifying_key: Vec<u8>,
     encryption_public: Vec<u8>,
+    /// Optional nickname for the user (max 32 chars)
+    nickname: Option<String>,
 }
 
 impl PublicIdentity {
@@ -219,12 +221,38 @@ impl PublicIdentity {
             peer_id: identity.peer_id.clone(),
             verifying_key: identity.verifying_key.to_bytes().to_vec(),
             encryption_public: identity.encryption_public.to_bytes().to_vec(),
+            nickname: None,
+        }
+    }
+    
+    /// Create a public identity from a full identity with a nickname
+    pub fn from_identity_with_nickname(identity: &Identity, nickname: Option<String>) -> Self {
+        // Truncate nickname to 32 chars if provided
+        let nickname = nickname.map(|n| {
+            n.chars().take(32).collect::<String>()
+        });
+        
+        Self {
+            peer_id: identity.peer_id.clone(),
+            verifying_key: identity.verifying_key.to_bytes().to_vec(),
+            encryption_public: identity.encryption_public.to_bytes().to_vec(),
+            nickname,
         }
     }
     
     /// Get the peer ID
     pub fn peer_id(&self) -> &PeerId {
         &self.peer_id
+    }
+    
+    /// Get the nickname if available
+    pub fn nickname(&self) -> Option<&str> {
+        self.nickname.as_deref()
+    }
+    
+    /// Set the nickname
+    pub fn set_nickname(&mut self, nickname: Option<String>) {
+        self.nickname = nickname.map(|n| n.chars().take(32).collect());
     }
     
     /// Get the Ed25519 verifying key
