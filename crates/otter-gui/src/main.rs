@@ -73,7 +73,7 @@ struct Identity {
     pub created_at: String,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct GoogleAuthData {
     pub email: String,
     pub name: String,
@@ -301,21 +301,70 @@ impl GuiApp {
         }
     }
 
+    fn get_google_auth_path() -> PathBuf {
+        if let Some(home) = dirs::home_dir() {
+            home.join(".otter").join("google_auth.json")
+        } else {
+            PathBuf::from(".otter/google_auth.json")
+        }
+    }
+
+    fn load_google_auth() -> Option<GoogleAuthData> {
+        let path = Self::get_google_auth_path();
+        if path.exists() {
+            if let Ok(content) = fs::read_to_string(&path) {
+                if let Ok(auth_data) = serde_json::from_str::<GoogleAuthData>(&content) {
+                    tracing::info!("Google auth caricato da cache");
+                    return Some(auth_data);
+                }
+            }
+        }
+        None
+    }
+
+    fn save_google_auth(auth_data: &GoogleAuthData) -> Result<(), Box<dyn std::error::Error>> {
+        let path = Self::get_google_auth_path();
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let json = serde_json::to_string_pretty(auth_data)?;
+        fs::write(&path, json)?;
+        tracing::info!("Google auth salvato in cache");
+        Ok(())
+    }
+
+    fn delete_google_auth() -> Result<(), Box<dyn std::error::Error>> {
+        let path = Self::get_google_auth_path();
+        if path.exists() {
+            fs::remove_file(&path)?;
+        }
+        Ok(())
+    }
+
     fn new() -> (Self, Task<Message>) {
         let mut app = GuiApp::default();
         if let Some(identity) = GuiApp::load_identity() {
             app.user_identity = Some(identity);
-            // Tenta Google auth in background (opzionale)
-            return (app, Task::perform(
-                GuiApp::perform_google_auth(),
-                |result| match result {
-                    Ok(data) => Message::LoginGoogleAuthSuccess(data),
-                    Err(e) => {
-                        tracing::warn!("Google auth fallito all'avvio: {}", e);
-                        Message::NetworkStartInit
+            
+            // Prova a caricare Google auth da cache
+            if let Some(google_auth) = GuiApp::load_google_auth() {
+                app.google_auth_data = Some(google_auth);
+                tracing::info!("Google auth caricato dalla cache");
+                return (app, Task::done(Message::NetworkStartInit));
+            } else {
+                // Se non c'è in cache, tenta di autenticarsi
+                tracing::info!("Google auth non in cache, tentando nuova autenticazione...");
+                return (app, Task::perform(
+                    GuiApp::perform_google_auth(),
+                    |result| match result {
+                        Ok(data) => Message::LoginGoogleAuthSuccess(data),
+                        Err(e) => {
+                            tracing::warn!("Google auth fallito all'avvio: {}", e);
+                            Message::NetworkStartInit
+                        }
                     }
-                }
-            ));
+                ));
+            }
         } else {
             app.current_screen = Screen::Home;
         }
@@ -922,8 +971,13 @@ impl GuiApp {
                 }
             }
             Message::LoginGoogleAuthSuccess(google_data) => {
-                // Store auth data
+                // Store auth data in memory
                 self.google_auth_data = Some(google_data.clone());
+                
+                // Save auth data to cache for future sessions
+                if let Err(e) = GuiApp::save_google_auth(&google_data) {
+                    tracing::warn!("Errore salvataggio Google auth: {}", e);
+                }
                 
                 // Se non abbiamo un'identità locally salvata, prova a caricate da Drive
                 if self.user_identity.is_none() {
@@ -1063,6 +1117,7 @@ impl GuiApp {
             }
             Message::Logout => {
                 let _ = GuiApp::delete_identity();
+                let _ = GuiApp::delete_google_auth();
                 self.user_identity = None;
                 self.current_screen = Screen::Home;
                 self.has_reached_bottom = false;
