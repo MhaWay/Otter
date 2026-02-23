@@ -102,6 +102,14 @@ impl LoadingStatus {
             LoadingStatus::Ready => "Rete pronta, caricamento completato",
         }
     }
+    
+    fn message_with_retry(&self, retry: u32) -> String {
+        if retry > 0 && *self == LoadingStatus::BootstrapConnecting {
+            format!("Connessione ai peer bootstrap (tentativo {}/3)...", retry + 1)
+        } else {
+            self.message().to_string()
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -219,6 +227,7 @@ struct GuiApp {
     auth_error: Option<String>,
     spinner_frame: usize,
     loading_status: LoadingStatus,  // Stato del caricamento rete
+    loading_retry_count: u32,  // Contatore tentativi per fase corrente
     current_tab: MainAppTab,
     sidebar_expanded: bool,
     sidebar_width: f32,
@@ -253,6 +262,7 @@ impl Default for GuiApp {
             auth_error: None,
             spinner_frame: 0,
             loading_status: LoadingStatus::Initializing,
+            loading_retry_count: 0,
             current_tab: MainAppTab::Home,
             sidebar_expanded: false,
             sidebar_width: 240.0,
@@ -1453,6 +1463,8 @@ impl GuiApp {
                         
                         // Aggiorna stato: bootstrap completed (prima connessione, con delay)
                         if self.loading_status == LoadingStatus::BootstrapConnecting {
+                            // Reset retry counter quando connessione ha successo
+                            self.loading_retry_count = 0;
                             return Task::perform(
                                 async {
                                     tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
@@ -1549,47 +1561,90 @@ impl GuiApp {
                 self.loading_status = status.clone();
                 tracing::debug!("Loading status: {}", status.message());
                 
-                // Quando raggiungiamo BootstrapCompleted, invia l'identity message
-                if status == LoadingStatus::BootstrapCompleted {
-                    if let (Some(ref cmd_tx), Some(ref identity), Some(ref otter_identity)) = 
-                        (&self.network_command_tx, &self.user_identity, &self.otter_identity) {
-                        
-                        // Crea PublicIdentity con nickname
-                        let public_identity = OtterPublicIdentity::from_identity_with_nickname(
-                            otter_identity,
-                            Some(identity.nickname.clone())
+                // Timeout di fallback per ogni stato (se non riceve eventi, procede comunque)
+                match status {
+                    LoadingStatus::ListeningStarted => {
+                        // Fallback: se dopo 3s non riceve ListeningOn, passa a BootstrapConnecting
+                        return Task::perform(
+                            async {
+                                tokio::time::sleep(tokio::time::Duration::from_millis(3000)).await;
+                            },
+                            |_| Message::UpdateLoadingStatus(LoadingStatus::BootstrapConnecting)
                         );
-                        
-                        // Crea il messaggio Identity
-                        let otter_msg = OtterMessage::identity(public_identity);
-                        
-                        // Serializza e invia
-                        if let Ok(msg_bytes) = otter_msg.to_bytes() {
-                            let dummy_peer_id = libp2p::PeerId::random();
-                            if let Ok(_) = cmd_tx.try_send(NetworkCommand::SendMessage {
-                                to: dummy_peer_id,
-                                data: msg_bytes,
-                            }) {
-                                tracing::info!("Identity message inviato per: {}", identity.nickname);
-                                
-                                // Passa subito a SendingIdentity, poi dopo 2s a Ready
-                                return Task::batch([
-                                    Task::done(Message::UpdateLoadingStatus(LoadingStatus::SendingIdentity)),
-                                    Task::perform(
-                                        async {
-                                            tokio::time::sleep(tokio::time::Duration::from_millis(2000)).await;
-                                        },
-                                        |_| Message::UpdateLoadingStatus(LoadingStatus::Ready)
-                                    )
-                                ]);
+                    }
+                    LoadingStatus::BootstrapConnecting => {
+                        // Sistema di retry: 3 tentativi prima di procedere in modalità degradata
+                        if self.loading_retry_count < 3 {
+                            self.loading_retry_count += 1;
+                            tracing::warn!(
+                                "Bootstrap tentativo {}/3 - in attesa connessione peer...", 
+                                self.loading_retry_count
+                            );
+                            
+                            return Task::perform(
+                                async {
+                                    tokio::time::sleep(tokio::time::Duration::from_millis(4000)).await;
+                                },
+                                |_| Message::UpdateLoadingStatus(LoadingStatus::BootstrapConnecting)
+                            );
+                        } else {
+                            // Dopo 3 tentativi falliti, procede in modalità degradata
+                            tracing::error!(
+                                "Bootstrap fallito dopo {} tentativi - prosegue in modalità degradata", 
+                                self.loading_retry_count
+                            );
+                            self.loading_retry_count = 0; // Reset per eventuali usi futuri
+                            
+                            return Task::perform(
+                                async {
+                                    tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+                                },
+                                |_| Message::UpdateLoadingStatus(LoadingStatus::BootstrapCompleted)
+                            );
+                        }
+                    }
+                    LoadingStatus::BootstrapCompleted => {
+                        // Invia l'identity message
+                        if let (Some(ref cmd_tx), Some(ref identity), Some(ref otter_identity)) = 
+                            (&self.network_command_tx, &self.user_identity, &self.otter_identity) {
+                            
+                            // Crea PublicIdentity con nickname
+                            let public_identity = OtterPublicIdentity::from_identity_with_nickname(
+                                otter_identity,
+                                Some(identity.nickname.clone())
+                            );
+                            
+                            // Crea il messaggio Identity
+                            let otter_msg = OtterMessage::identity(public_identity);
+                            
+                            // Serializza e invia
+                            if let Ok(msg_bytes) = otter_msg.to_bytes() {
+                                let dummy_peer_id = libp2p::PeerId::random();
+                                if let Ok(_) = cmd_tx.try_send(NetworkCommand::SendMessage {
+                                    to: dummy_peer_id,
+                                    data: msg_bytes,
+                                }) {
+                                    tracing::info!("Identity message inviato per: {}", identity.nickname);
+                                    
+                                    // Passa subito a SendingIdentity, poi dopo 1.5s a Ready
+                                    return Task::batch([
+                                        Task::done(Message::UpdateLoadingStatus(LoadingStatus::SendingIdentity)),
+                                        Task::perform(
+                                            async {
+                                                tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
+                                            },
+                                            |_| Message::UpdateLoadingStatus(LoadingStatus::Ready)
+                                        )
+                                    ]);
+                                }
                             }
                         }
                     }
-                }
-                
-                // Se lo stato è Ready, passa a MainApp
-                if status == LoadingStatus::Ready {
-                    return Task::done(Message::NetworkReady);
+                    LoadingStatus::Ready => {
+                        // Passa a MainApp
+                        return Task::done(Message::NetworkReady);
+                    }
+                    _ => {}
                 }
             }
         }
@@ -2255,7 +2310,7 @@ Scorrendo verso il basso e facendo clic su \"Accetto\", riconosci che:\n\
     fn view_loading(&self) -> Element<Message> {
         let title = Text::new("🌐 Connessione alla rete...").size(36).font(ROBOTO_FONT);
         
-        let status = Text::new(self.loading_status.message())
+        let status = Text::new(self.loading_status.message_with_retry(self.loading_retry_count))
             .size(18)
             .font(ROBOTO_FONT)
             .color([0.7, 0.7, 0.7]);
