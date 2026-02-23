@@ -1390,61 +1390,12 @@ impl GuiApp {
                         self.network_command_tx = Some(cmd_tx.clone());
                         tracing::info!("Rete P2P avviata con successo");
                         
-                        // Aggiorna stato: listening started
-                        self.loading_status = LoadingStatus::ListeningStarted;
-                        
-                        // Invia la propria Identity con nickname sulla rete
-                        if let Some(ref identity) = self.user_identity {
-                            if let Some(ref otter_identity) = self.otter_identity {
-                                // Crea PublicIdentity con nickname
-                                let public_identity = OtterPublicIdentity::from_identity_with_nickname(
-                                    otter_identity,
-                                    Some(identity.nickname.clone())
-                                );
-                                
-                                // Crea il messaggio Identity usando l'helper
-                                let otter_msg = OtterMessage::identity(public_identity);
-                                
-                                // Serializza il messaggio
-                                if let Ok(msg_bytes) = otter_msg.to_bytes() {
-                                    // Aggiorna stato: sending identity
-                                    self.loading_status = LoadingStatus::SendingIdentity;
-                                    
-                                    // Manda il messaggio via gossipsub usando un dummy PeerId
-                                    let dummy_peer_id = libp2p::PeerId::random();
-                                    match cmd_tx.try_send(NetworkCommand::SendMessage {
-                                        to: dummy_peer_id,
-                                        data: msg_bytes,
-                                    }) {
-                                        Ok(_) => {
-                                            tracing::info!("Identity message inviato sulla rete per: {}", identity.nickname);
-                                            
-                                            // Dopo invio identity, aspetta 1.5 secondi e va a Ready
-                                            return Task::perform(
-                                                async {
-                                                    tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
-                                                },
-                                                |_| Message::UpdateLoadingStatus(LoadingStatus::Ready)
-                                            );
-                                        }
-                                        Err(e) => {
-                                            tracing::warn!("Errore invio identity message: {}", e);
-                                        }
-                                    }
-                                } else {
-                                    tracing::warn!("Errore serializzazione identity message");
-                                }
-                            } else {
-                                tracing::warn!("Otter identity non disponibile");
-                            }
-                        }
-                        
-                        // Fallback: passa a ready dopo un attimo
+                        // Mostra "Initializing" per 700ms prima di passare a ListeningStarted
                         return Task::perform(
                             async {
-                                tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
+                                tokio::time::sleep(tokio::time::Duration::from_millis(700)).await;
                             },
-                            |_| Message::UpdateLoadingStatus(LoadingStatus::Ready)
+                            |_| Message::UpdateLoadingStatus(LoadingStatus::ListeningStarted)
                         );
                     }
                     Err(e) => {
@@ -1458,10 +1409,15 @@ impl GuiApp {
                 match event {
                     NetworkEvent::ListeningOn { address } => {
                         tracing::info!("Network in ascolto su: {}", address);
-                        // Aggiorna stato: bootstrap connecting
+                        // Aggiorna stato: bootstrap connecting (con delay per visualizzazione)
                         if self.loading_status == LoadingStatus::Initializing || 
                            self.loading_status == LoadingStatus::ListeningStarted {
-                            return Task::done(Message::UpdateLoadingStatus(LoadingStatus::BootstrapConnecting));
+                            return Task::perform(
+                                async {
+                                    tokio::time::sleep(tokio::time::Duration::from_millis(800)).await;
+                                },
+                                |_| Message::UpdateLoadingStatus(LoadingStatus::BootstrapConnecting)
+                            );
                         }
                     }
                     NetworkEvent::PeerDiscovered { peer_id, addresses } => {
@@ -1495,9 +1451,14 @@ impl GuiApp {
                     NetworkEvent::PeerConnected { peer_id } => {
                         tracing::info!("Peer connesso: {}", peer_id);
                         
-                        // Aggiorna stato: bootstrap completed (prima connessione)
+                        // Aggiorna stato: bootstrap completed (prima connessione, con delay)
                         if self.loading_status == LoadingStatus::BootstrapConnecting {
-                            return Task::done(Message::UpdateLoadingStatus(LoadingStatus::BootstrapCompleted));
+                            return Task::perform(
+                                async {
+                                    tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+                                },
+                                |_| Message::UpdateLoadingStatus(LoadingStatus::BootstrapCompleted)
+                            );
                         }
                         
                         // Aggiorna stato online del peer
@@ -1587,6 +1548,44 @@ impl GuiApp {
             Message::UpdateLoadingStatus(status) => {
                 self.loading_status = status.clone();
                 tracing::debug!("Loading status: {}", status.message());
+                
+                // Quando raggiungiamo BootstrapCompleted, invia l'identity message
+                if status == LoadingStatus::BootstrapCompleted {
+                    if let (Some(ref cmd_tx), Some(ref identity), Some(ref otter_identity)) = 
+                        (&self.network_command_tx, &self.user_identity, &self.otter_identity) {
+                        
+                        // Crea PublicIdentity con nickname
+                        let public_identity = OtterPublicIdentity::from_identity_with_nickname(
+                            otter_identity,
+                            Some(identity.nickname.clone())
+                        );
+                        
+                        // Crea il messaggio Identity
+                        let otter_msg = OtterMessage::identity(public_identity);
+                        
+                        // Serializza e invia
+                        if let Ok(msg_bytes) = otter_msg.to_bytes() {
+                            let dummy_peer_id = libp2p::PeerId::random();
+                            if let Ok(_) = cmd_tx.try_send(NetworkCommand::SendMessage {
+                                to: dummy_peer_id,
+                                data: msg_bytes,
+                            }) {
+                                tracing::info!("Identity message inviato per: {}", identity.nickname);
+                                
+                                // Passa subito a SendingIdentity, poi dopo 2s a Ready
+                                return Task::batch([
+                                    Task::done(Message::UpdateLoadingStatus(LoadingStatus::SendingIdentity)),
+                                    Task::perform(
+                                        async {
+                                            tokio::time::sleep(tokio::time::Duration::from_millis(2000)).await;
+                                        },
+                                        |_| Message::UpdateLoadingStatus(LoadingStatus::Ready)
+                                    )
+                                ]);
+                            }
+                        }
+                    }
+                }
                 
                 // Se lo stato è Ready, passa a MainApp
                 if status == LoadingStatus::Ready {
