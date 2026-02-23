@@ -108,6 +108,7 @@ enum Message {
     // Gestione contatti
     ChangeContactsSubTab(ContactsSubTab),
     PeerSearchQueryChanged(String),
+    PeerSearchTimeout,                  // Timeout ricerca peer
     SendContactRequest(String, String), // peer_id, nickname
     AcceptContactRequest(String),       // peer_id
     RejectContactRequest(String),       // peer_id
@@ -200,6 +201,7 @@ struct GuiApp {
     // Ricerca peer
     peer_search_query: String,
     peer_search_results: Vec<Contact>,
+    peer_search_loading: bool,       // Indica se la ricerca è in corso
     discovered_peers: Vec<Contact>,  // Peer CONNESSI ora (RAM, non persistente)
     peers_history: Vec<Contact>,     // Cronologia peer da file (caricata on-demand)
     
@@ -231,6 +233,7 @@ impl Default for GuiApp {
             // Ricerca
             peer_search_query: String::new(),
             peer_search_results: Vec::new(),
+            peer_search_loading: false,
             // Peer scoperti dalla rete P2P
             discovered_peers: Vec::new(),
             peers_history: Vec::new(),
@@ -1066,8 +1069,29 @@ impl GuiApp {
             Message::PeerSearchQueryChanged(query) => {
                 self.peer_search_query = query.clone();
                 
-                // Simula ricerca peer (in futuro: query alla rete P2P)
-                self.peer_search_results = self.simulate_peer_search(&query);
+                if query.trim().is_empty() {
+                    // Se la query è vuota, cancella i risultati e ferma il loading
+                    self.peer_search_results = Vec::new();
+                    self.peer_search_loading = false;
+                } else {
+                    // Avvia il loading
+                    self.peer_search_loading = true;
+                    
+                    // Simula ricerca peer (in futuro: query alla rete P2P)
+                    self.peer_search_results = self.simulate_peer_search(&query);
+                    
+                    // Avvia timeout di 5 secondi per terminare il loading
+                    return Task::perform(
+                        async {
+                            tokio::time::sleep(Duration::from_secs(5)).await;
+                        },
+                        |_| Message::PeerSearchTimeout
+                    );
+                }
+            }
+            Message::PeerSearchTimeout => {
+                // Termina il loading dopo il timeout
+                self.peer_search_loading = false;
             }
             Message::SendContactRequest(peer_id, nickname) => {
                 // TODO: Inviare richiesta tramite protocollo P2P
@@ -2339,16 +2363,50 @@ Scorrendo verso il basso e facendo clic su \"Accetto\", riconosci che:\n\
                     .font(ROBOTO_FONT)
                     .color(Color::from_rgb(0.6, 0.6, 0.6))
             );
-        } else if self.peer_search_results.is_empty() {
-            results = results.push(
-                Text::new("Nessun peer trovato")
-                    .size(14)
-                    .font(ROBOTO_FONT)
-                    .color(Color::from_rgb(0.6, 0.6, 0.6))
-            );
         } else {
-            for peer in &self.peer_search_results {
-                results = results.push(self.create_peer_search_result(peer));
+            // Mostra i risultati trovati
+            if !self.peer_search_results.is_empty() {
+                for peer in &self.peer_search_results {
+                    results = results.push(self.create_peer_search_result(peer));
+                }
+            }
+            
+            // Mostra il loading indicator in fondo se la ricerca è in corso
+            if self.peer_search_loading {
+                // Caratteri spinner animato
+                let spinner_chars = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+                let spinner_char = spinner_chars[self.spinner_frame % spinner_chars.len()];
+                
+                let loading_row = Row::new()
+                    .spacing(10)
+                    .padding(15)
+                    .align_y(Alignment::Center)
+                    .push(
+                        Text::new(spinner_char.to_string())
+                            .size(20)
+                            .font(ROBOTO_FONT)
+                            .color(Color::from_rgb(0.4, 0.6, 1.0))
+                    )
+                    .push(
+                        Text::new("Ricerca in corso...")
+                            .size(14)
+                            .font(ROBOTO_FONT)
+                            .color(Color::from_rgb(0.6, 0.6, 0.6))
+                    );
+                
+                results = results.push(
+                    Container::new(loading_row)
+                        .width(Length::Fill)
+                        .padding(10)
+                );
+            } else if self.peer_search_results.is_empty() {
+                // Mostra "Nessun peer trovato" solo se il loading è terminato e non ci sono risultati
+                results = results.push(
+                    Text::new("Nessun peer trovato")
+                        .size(14)
+                        .font(ROBOTO_FONT)
+                        .color(Color::from_rgb(0.6, 0.6, 0.6))
+                );
             }
         }
         
