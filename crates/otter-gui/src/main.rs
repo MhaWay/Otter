@@ -81,6 +81,29 @@ struct GoogleAuthData {
     pub access_token: String,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+enum LoadingStatus {
+    Initializing,           // Inizializzazione rete
+    ListeningStarted,       // Ascolto su porta locale
+    BootstrapConnecting,    // Connessione ai peer bootstrap
+    BootstrapCompleted,     // Almeno 1 peer connesso
+    SendingIdentity,        // Invio messaggio Identity
+    Ready,                  // Tutto pronto
+}
+
+impl LoadingStatus {
+    fn message(&self) -> &str {
+        match self {
+            LoadingStatus::Initializing => "Inizializzazione rete P2P...",
+            LoadingStatus::ListeningStarted => "Ascolto connessioni in corso...",
+            LoadingStatus::BootstrapConnecting => "Connessione ai peer bootstrap...",
+            LoadingStatus::BootstrapCompleted => "Peer connessi, sincronizzazione rete...",
+            LoadingStatus::SendingIdentity => "Invio identità sulla rete...",
+            LoadingStatus::Ready => "Rete pronta, caricamento completato",
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 enum Message {
     TryLogin,
@@ -123,6 +146,7 @@ enum Message {
     NetworkReady,  // Network connesso e pronto
     PeerIdentityReceived { peer_id: String, nickname: Option<String> },
     NetworkStartInit,  // Inizio init della rete (dalla schermata Loading)
+    UpdateLoadingStatus(LoadingStatus),  // Aggiorna stato caricamento
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -194,6 +218,7 @@ struct GuiApp {
     google_auth_data: Option<GoogleAuthData>,
     auth_error: Option<String>,
     spinner_frame: usize,
+    loading_status: LoadingStatus,  // Stato del caricamento rete
     current_tab: MainAppTab,
     sidebar_expanded: bool,
     sidebar_width: f32,
@@ -227,6 +252,7 @@ impl Default for GuiApp {
             google_auth_data: None,
             auth_error: None,
             spinner_frame: 0,
+            loading_status: LoadingStatus::Initializing,
             current_tab: MainAppTab::Home,
             sidebar_expanded: false,
             sidebar_width: 240.0,
@@ -1364,6 +1390,9 @@ impl GuiApp {
                         self.network_command_tx = Some(cmd_tx.clone());
                         tracing::info!("Rete P2P avviata con successo");
                         
+                        // Aggiorna stato: listening started
+                        self.loading_status = LoadingStatus::ListeningStarted;
+                        
                         // Invia la propria Identity con nickname sulla rete
                         if let Some(ref identity) = self.user_identity {
                             if let Some(ref otter_identity) = self.otter_identity {
@@ -1378,6 +1407,9 @@ impl GuiApp {
                                 
                                 // Serializza il messaggio
                                 if let Ok(msg_bytes) = otter_msg.to_bytes() {
+                                    // Aggiorna stato: sending identity
+                                    self.loading_status = LoadingStatus::SendingIdentity;
+                                    
                                     // Manda il messaggio via gossipsub usando un dummy PeerId
                                     let dummy_peer_id = libp2p::PeerId::random();
                                     match cmd_tx.try_send(NetworkCommand::SendMessage {
@@ -1386,6 +1418,14 @@ impl GuiApp {
                                     }) {
                                         Ok(_) => {
                                             tracing::info!("Identity message inviato sulla rete per: {}", identity.nickname);
+                                            
+                                            // Dopo invio identity, aspetta 1.5 secondi e va a Ready
+                                            return Task::perform(
+                                                async {
+                                                    tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
+                                                },
+                                                |_| Message::UpdateLoadingStatus(LoadingStatus::Ready)
+                                            );
                                         }
                                         Err(e) => {
                                             tracing::warn!("Errore invio identity message: {}", e);
@@ -1399,12 +1439,12 @@ impl GuiApp {
                             }
                         }
                         
-                        // Attendi un momento per permettere connessioni, poi segna come pronto
+                        // Fallback: passa a ready dopo un attimo
                         return Task::perform(
                             async {
-                                tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+                                tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
                             },
-                            |_| Message::NetworkReady
+                            |_| Message::UpdateLoadingStatus(LoadingStatus::Ready)
                         );
                     }
                     Err(e) => {
@@ -1416,6 +1456,14 @@ impl GuiApp {
             }
             Message::NetworkEvent(event) => {
                 match event {
+                    NetworkEvent::ListeningOn { address } => {
+                        tracing::info!("Network in ascolto su: {}", address);
+                        // Aggiorna stato: bootstrap connecting
+                        if self.loading_status == LoadingStatus::Initializing || 
+                           self.loading_status == LoadingStatus::ListeningStarted {
+                            return Task::done(Message::UpdateLoadingStatus(LoadingStatus::BootstrapConnecting));
+                        }
+                    }
                     NetworkEvent::PeerDiscovered { peer_id, addresses } => {
                         tracing::info!("Peer scoperto: {} con indirizzi: {:?}", peer_id, addresses);
                         
@@ -1446,6 +1494,12 @@ impl GuiApp {
                     }
                     NetworkEvent::PeerConnected { peer_id } => {
                         tracing::info!("Peer connesso: {}", peer_id);
+                        
+                        // Aggiorna stato: bootstrap completed (prima connessione)
+                        if self.loading_status == LoadingStatus::BootstrapConnecting {
+                            return Task::done(Message::UpdateLoadingStatus(LoadingStatus::BootstrapCompleted));
+                        }
+                        
                         // Aggiorna stato online del peer
                         if let Some(peer) = self.discovered_peers.iter_mut().find(|p| p.peer_id == peer_id.to_string()) {
                             peer.is_online = true;
@@ -1459,9 +1513,6 @@ impl GuiApp {
                             peer.is_online = false;
                             peer.last_seen = Some("Offline".to_string());
                         }
-                    }
-                    NetworkEvent::ListeningOn { address } => {
-                        tracing::info!("Network in ascolto su: {}", address);
                     }
                     NetworkEvent::MessageReceived { from, data } => {
                         tracing::debug!("Messaggio ricevuto da {}: {} bytes", from, data.len());
@@ -1528,8 +1579,19 @@ impl GuiApp {
             Message::NetworkStartInit => {
                 tracing::info!("Inizio inizializzazione rete P2P");
                 self.current_screen = Screen::Loading;
+                self.loading_status = LoadingStatus::Initializing;
                 self.auth_error = None;
                 return Self::start_network_task();
+            }
+            
+            Message::UpdateLoadingStatus(status) => {
+                self.loading_status = status.clone();
+                tracing::debug!("Loading status: {}", status.message());
+                
+                // Se lo stato è Ready, passa a MainApp
+                if status == LoadingStatus::Ready {
+                    return Task::done(Message::NetworkReady);
+                }
             }
         }
         Task::none()
@@ -2194,7 +2256,7 @@ Scorrendo verso il basso e facendo clic su \"Accetto\", riconosci che:\n\
     fn view_loading(&self) -> Element<Message> {
         let title = Text::new("🌐 Connessione alla rete...").size(36).font(ROBOTO_FONT);
         
-        let status = Text::new("Inizializzazione bootstrap e connessione ai peer")
+        let status = Text::new(self.loading_status.message())
             .size(18)
             .font(ROBOTO_FONT)
             .color([0.7, 0.7, 0.7]);
