@@ -19,7 +19,7 @@ use std::net::TcpListener;
 use tokio::sync::mpsc;
 use otter_network::{bootstrap::BootstrapSources, NetworkEvent, NetworkCommand, Network, create_network_channels};
 use otter_messaging::Message as OtterMessage;
-use otter_identity::PublicIdentity as OtterPublicIdentity;
+use otter_identity::{PublicIdentity as OtterPublicIdentity, Identity as OtterIdentity};
 use futures::stream;
 use std::sync::Arc;
 use tokio::sync::Mutex as TokioMutex;
@@ -189,6 +189,7 @@ struct GuiApp {
     current_screen: Screen,
     has_reached_bottom: bool,
     user_identity: Option<Identity>,
+    otter_identity: Option<OtterIdentity>,  // Vera identity con chiavi per la rete
     nickname_input: String,
     google_auth_data: Option<GoogleAuthData>,
     auth_error: Option<String>,
@@ -221,6 +222,7 @@ impl Default for GuiApp {
             current_screen: Screen::Home,
             has_reached_bottom: false,
             user_identity: None,
+            otter_identity: None,
             nickname_input: String::new(),
             google_auth_data: None,
             auth_error: None,
@@ -301,6 +303,46 @@ impl GuiApp {
         }
     }
 
+    fn get_otter_identity_path() -> PathBuf {
+        if let Some(home) = dirs::home_dir() {
+            home.join(".otter").join("otter_keys.json")
+        } else {
+            PathBuf::from(".otter/otter_keys.json")
+        }
+    }
+
+    fn save_otter_identity(identity: &OtterIdentity) -> Result<(), Box<dyn std::error::Error>> {
+        let path = Self::get_otter_identity_path();
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let json = identity.to_json()?;
+        fs::write(&path, json)?;
+        tracing::info!("Otter identity salvata in {}", path.display());
+        Ok(())
+    }
+
+    fn load_otter_identity() -> Option<OtterIdentity> {
+        let path = Self::get_otter_identity_path();
+        if path.exists() {
+            if let Ok(content) = fs::read_to_string(&path) {
+                if let Ok(identity) = OtterIdentity::from_json(&content) {
+                    tracing::info!("Otter identity caricata da {}", path.display());
+                    return Some(identity);
+                }
+            }
+        }
+        None
+    }
+
+    fn delete_otter_identity() -> Result<(), Box<dyn std::error::Error>> {
+        let path = Self::get_otter_identity_path();
+        if path.exists() {
+            fs::remove_file(&path)?;
+        }
+        Ok(())
+    }
+
     fn get_google_auth_path() -> PathBuf {
         if let Some(home) = dirs::home_dir() {
             home.join(".otter").join("google_auth.json")
@@ -345,6 +387,8 @@ impl GuiApp {
         let mut app = GuiApp::default();
         if let Some(identity) = GuiApp::load_identity() {
             app.user_identity = Some(identity);
+            // Carica anche la vera otter identity
+            app.otter_identity = GuiApp::load_otter_identity();
             
             // Prova a caricare Google auth da cache
             if let Some(google_auth) = GuiApp::load_google_auth() {
@@ -1095,6 +1139,24 @@ impl GuiApp {
                 match result {
                     Ok(identity) => {
                         self.user_identity = Some(identity);
+                        
+                        // Crea e salva la vera otter identity con le chiavi
+                        match OtterIdentity::generate() {
+                            Ok(otter_id) => {
+                                if let Err(e) = GuiApp::save_otter_identity(&otter_id) {
+                                    tracing::warn!("Errore salvataggio otter identity: {}", e);
+                                    self.auth_error = Some(format!("Errore generazione chiavi: {}", e));
+                                    return Task::none();
+                                }
+                                self.otter_identity = Some(otter_id);
+                            }
+                            Err(e) => {
+                                tracing::error!("Errore generazione identity: {}", e);
+                                self.auth_error = Some(format!("Errore generazione chiavi: {}", e));
+                                return Task::none();
+                            }
+                        }
+                        
                         self.current_screen = Screen::Loading;
                         self.auth_error = None;
                         // Avvia la rete P2P
@@ -1117,8 +1179,10 @@ impl GuiApp {
             }
             Message::Logout => {
                 let _ = GuiApp::delete_identity();
+                let _ = GuiApp::delete_otter_identity();
                 let _ = GuiApp::delete_google_auth();
                 self.user_identity = None;
+                self.otter_identity = None;
                 self.current_screen = Screen::Home;
                 self.has_reached_bottom = false;
                 self.nickname_input.clear();
@@ -1281,13 +1345,42 @@ impl GuiApp {
             Message::NetworkStarted(result) => {
                 match result {
                     Ok(cmd_tx) => {
-                        self.network_command_tx = Some(cmd_tx);
+                        self.network_command_tx = Some(cmd_tx.clone());
                         tracing::info!("Rete P2P avviata con successo");
                         
                         // Invia la propria Identity con nickname sulla rete
                         if let Some(ref identity) = self.user_identity {
-                            // TODO: Implementare invio Identity message via gossipsub
-                            tracing::info!("Annunciando identity per: {}", identity.nickname);
+                            if let Some(ref otter_identity) = self.otter_identity {
+                                // Crea PublicIdentity con nickname
+                                let public_identity = OtterPublicIdentity::from_identity_with_nickname(
+                                    otter_identity,
+                                    Some(identity.nickname.clone())
+                                );
+                                
+                                // Crea il messaggio Identity usando l'helper
+                                let otter_msg = OtterMessage::identity(public_identity);
+                                
+                                // Serializza il messaggio
+                                if let Ok(msg_bytes) = otter_msg.to_bytes() {
+                                    // Manda il messaggio via gossipsub usando un dummy PeerId
+                                    let dummy_peer_id = libp2p::PeerId::random();
+                                    match cmd_tx.try_send(NetworkCommand::SendMessage {
+                                        to: dummy_peer_id,
+                                        data: msg_bytes,
+                                    }) {
+                                        Ok(_) => {
+                                            tracing::info!("Identity message inviato sulla rete per: {}", identity.nickname);
+                                        }
+                                        Err(e) => {
+                                            tracing::warn!("Errore invio identity message: {}", e);
+                                        }
+                                    }
+                                } else {
+                                    tracing::warn!("Errore serializzazione identity message");
+                                }
+                            } else {
+                                tracing::warn!("Otter identity non disponibile");
+                            }
                         }
                         
                         // Attendi un momento per permettere connessioni, poi segna come pronto
