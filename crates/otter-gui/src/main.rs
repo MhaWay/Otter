@@ -1579,32 +1579,14 @@ impl GuiApp {
                         );
                     }
                     LoadingStatus::BootstrapConnecting => {
-                        // Sistema di retry: 3 tentativi prima di procedere in modalità degradata
-                        if self.loading_retry_count < 3 {
-                            self.loading_retry_count += 1;
-                            tracing::warn!(
-                                "Bootstrap tentativo {}/3 - in attesa connessione peer...", 
-                                self.loading_retry_count
-                            );
-                            self.loading_logs.push(format!("⚠ Tentativo {}/3 - timeout, riprovo...", self.loading_retry_count));
-                            
-                            return Task::perform(
-                                async {
-                                    tokio::time::sleep(tokio::time::Duration::from_millis(4000)).await;
-                                },
-                                |_| Message::UpdateLoadingStatus(LoadingStatus::BootstrapConnecting)
-                            );
-                        } else {
-                            // Dopo 3 tentativi falliti, procede in modalità degradata
-                            tracing::error!(
-                                "Bootstrap fallito dopo {} tentativi - prosegue in modalità degradata", 
-                                self.loading_retry_count
-                            );
-                            self.loading_logs.push("✗ Bootstrap fallito - modalità degradata".to_string());
-                            self.loading_retry_count = 0; // Reset per eventuali usi futuri
-                            
-                            return Task::done(Message::UpdateLoadingStatus(LoadingStatus::BootstrapCompleted));
-                        }
+                        // Nessun retry - stop al primo errore
+                        tracing::error!("Bootstrap timeout - nessun peer connesso");
+                        self.loading_logs.push("✗ Bootstrap timeout - nessun peer risponde".to_string());
+                        self.loading_logs.push("❌ ERRORE: Impossibile connettersi alla rete".to_string());
+                        self.loading_logs.push("   Verifica connessione internet e riprova".to_string());
+                        
+                        // Stop qui - non procede
+                        return Task::none();
                     }
                     LoadingStatus::BootstrapCompleted => {
                         // Invia l'identity message
@@ -2323,18 +2305,17 @@ Scorrendo verso il basso e facendo clic su \"Accetto\", riconosci che:\n\
     fn view_loading(&self) -> Element<Message> {
         let title = Text::new("🌐 Connessione alla rete...").size(36).font(ROBOTO_FONT);
         
-        let status = Text::new(self.loading_status.message_with_retry(self.loading_retry_count))
+        let status = Text::new(self.loading_status.message())
             .size(18)
             .font(ROBOTO_FONT)
             .color([0.7, 0.7, 0.7]);
         
         let spinner = self.create_spinner(100.0, "#6699ff");
         
-        // Area log per debug - più larga e leggibile
+        // Area log per debug - scrollabile con tutti i messaggi
         let mut logs_column = Column::new().spacing(6).padding(10);
-        let recent_logs: Vec<_> = self.loading_logs.iter().rev().take(10).rev().collect();
         
-        if recent_logs.is_empty() {
+        if self.loading_logs.is_empty() {
             logs_column = logs_column.push(
                 Text::new("In attesa eventi di rete...")
                     .size(14)
@@ -2342,7 +2323,8 @@ Scorrendo verso il basso e facendo clic su \"Accetto\", riconosci che:\n\
                     .color([0.5, 0.5, 0.5])
             );
         } else {
-            for log in recent_logs {
+            // Mostra TUTTI i log, non solo gli ultimi 10
+            for log in &self.loading_logs {
                 logs_column = logs_column.push(
                     Text::new(log)
                         .size(14)
@@ -2355,10 +2337,10 @@ Scorrendo verso il basso e facendo clic su \"Accetto\", riconosci che:\n\
         
         let logs_container = Container::new(
             Scrollable::new(logs_column)
-                .height(Length::Fixed(220.0))
+                .height(Length::Fixed(400.0))  // Aumentato da 220 a 400px
                 .width(Length::Fill)
         )
-        .width(Length::Fixed(700.0))
+        .width(Length::Fixed(800.0))  // Aumentato da 700 a 800px
         .padding(15)
         .style(|_theme| {
             container::Style {
@@ -2369,15 +2351,15 @@ Scorrendo verso il basso e facendo clic su \"Accetto\", riconosci che:\n\
         });
         
         let content = Column::new()
-            .push(Space::new().height(Length::Fill))
+            .push(Space::new().height(Length::Fixed(20.0)))  // Ridotto spazio sopra
             .push(title)
             .push(Space::new().height(Length::Fixed(20.0)))
             .push(status)
-            .push(Space::new().height(Length::Fixed(40.0)))
-            .push(spinner)
             .push(Space::new().height(Length::Fixed(30.0)))
+            .push(spinner)
+            .push(Space::new().height(Length::Fixed(20.0)))
             .push(logs_container)
-            .push(Space::new().height(Length::Fill))
+            .push(Space::new().height(Length::Fixed(20.0)))  // Ridotto spazio sotto
             .padding(40)
             .width(Length::Fill)
             .height(Length::Fill)
