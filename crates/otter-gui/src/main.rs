@@ -149,7 +149,7 @@ enum Message {
     UnblockContact(String),              // peer_id
     
     // Network events
-    NetworkStarted(Result<mpsc::Sender<NetworkCommand>, String>),
+    NetworkStarted(Result<(mpsc::Sender<NetworkCommand>, usize), String>),  // (command_tx, bootstrap_peer_count)
     NetworkEvent(NetworkEvent),
     NetworkReady,  // Network connesso e pronto
     PeerIdentityReceived { peer_id: String, nickname: Option<String> },
@@ -1398,10 +1398,20 @@ impl GuiApp {
             // Network events
             Message::NetworkStarted(result) => {
                 match result {
-                    Ok(cmd_tx) => {
+                    Ok((cmd_tx, peer_count)) => {
                         self.network_command_tx = Some(cmd_tx.clone());
                         tracing::info!("Rete P2P avviata con successo");
                         self.loading_logs.push("✓ Rete P2P avviata".to_string());
+                        
+                        // Log bootstrap info
+                        if peer_count == 0 {
+                            self.loading_logs.push("⚠ Nessun peer bootstrap trovato!".to_string());
+                            self.loading_logs.push("  Causa: DNS fallito o cache vuota".to_string());
+                            self.loading_logs.push("  La rete sarà isolata".to_string());
+                        } else {
+                            self.loading_logs.push(format!("🔍 Bootstrap: {} peer scoperti", peer_count));
+                            self.loading_logs.push(format!("📞 Connessione ai primi 5 peer..."));
+                        }
                         
                         // Passa subito a ListeningStarted
                         return Task::done(Message::UpdateLoadingStatus(LoadingStatus::ListeningStarted));
@@ -1548,6 +1558,7 @@ impl GuiApp {
                 tracing::info!("Inizio inizializzazione rete P2P");
                 self.current_screen = Screen::Loading;
                 self.loading_status = LoadingStatus::Initializing;
+                self.loading_logs.push("🚀 Inizializzazione rete P2P...".to_string());
                 self.auth_error = None;
                 return Self::start_network_task();
             }
@@ -1680,7 +1691,21 @@ impl GuiApp {
                 
                 // Dial bootstrap peers (using same helper logic as CLI)
                 let peers = bootstrap.bootstrap().await;
-                tracing::info!("Discovered {} bootstrap peers", peers.len());
+                tracing::info!("🎯 Bootstrap scoperto {} peer totali", peers.len());
+                
+                if peers.is_empty() {
+                    tracing::error!("❌ NESSUN PEER BOOTSTRAP TROVATO - rete isolata!");
+                    tracing::error!("   Possibili cause:");
+                    tracing::error!("   - DNS resolution fallita (no internet?)");
+                    tracing::error!("   - Cache locale vuota (prima esecuzione?)");
+                    tracing::error!("   - Firewall blocca DNS-over-HTTPS");
+                } else {
+                    tracing::info!("📋 Peer bootstrap trovati:");
+                    for (i, addr) in peers.iter().take(5).enumerate() {
+                        tracing::info!("   {}. {}", i + 1, addr);
+                    }
+                }
+                
                 for addr in peers.iter().take(5) {
                     if let Some(peer_id) = addr.iter().find_map(|proto| match proto {
                         libp2p::multiaddr::Protocol::P2p(peer_id) => Some(peer_id),
@@ -1689,8 +1714,11 @@ impl GuiApp {
                         network.add_dht_peer(&peer_id, addr);
                     }
                     
+                    tracing::info!("📞 Tentativo dial: {}", addr);
                     if let Err(e) = network.dial(addr) {
-                        tracing::warn!("Failed to dial bootstrap peer: {}", e);
+                        tracing::warn!("❌ Dial fallito per {}: {}", addr, e);
+                    } else {
+                        tracing::info!("✓ Dial avviato per {}", addr);
                     }
                 }
                 
@@ -1701,7 +1729,7 @@ impl GuiApp {
                     }
                 });
                 
-                Ok(command_tx)
+                Ok((command_tx, peers.len()))
             },
             |result| Message::NetworkStarted(result)
         )
