@@ -9,7 +9,7 @@ use clap::{Parser, Subcommand};
 use dialoguer::{theme::ColorfulTheme, Input, Select};
 use otter_identity::{Identity, PublicIdentity};
 use otter_messaging::{Message, MessageHandler};
-use otter_network::{create_network_channels, Network, NetworkCommand, NetworkEvent};
+use otter_network::{bootstrap::BootstrapSources, create_network_channels, Network, NetworkCommand, NetworkEvent};
 use otter_protocol::SignalingMessage;
 use otter_voice::{CallState, VoiceManager};
 use std::{
@@ -208,6 +208,65 @@ fn show_info(path: PathBuf) -> Result<()> {
     Ok(())
 }
 
+/// Bootstrap network with peer discovery
+async fn bootstrap_network(
+    network: &mut Network,
+    bootstrap: &mut BootstrapSources,
+) -> Result<()> {
+    info!("Starting bootstrap peer discovery...");
+    println!("🌍 Starting bootstrap discovery...");
+    
+    // Tier 2 + Tier 1: Get all bootstrap peers
+    let peers = bootstrap.bootstrap().await;
+    println!("✓ Discovered {} bootstrap peers", peers.len());
+    
+    if peers.is_empty() {
+        warn!("No bootstrap peers discovered - will rely on mDNS for local discovery");
+        return Ok(());
+    }
+    
+    // Try to connect to first few peers
+    let mut connected_count = 0;
+    for (i, addr) in peers.iter().take(5).enumerate() {
+        debug!("Dialing bootstrap peer {}/{}: {}", i + 1, peers.len().min(5), addr);
+        
+        // Extract peer_id for DHT tracking
+        if let Some(peer_id) = extract_peer_id_from_multiaddr(addr) {
+            network.add_dht_peer(&peer_id, addr);
+        }
+        
+        // Attempt connection
+        match network.dial(addr) {
+            Ok(_) => {
+                connected_count += 1;
+                info!("Dialing bootstrap peer: {}", addr);
+            }
+            Err(e) => {
+                warn!("Failed to dial bootstrap peer {}: {}", addr, e);
+            }
+        }
+    }
+    
+    if connected_count > 0 {
+        println!("✓ Bootstrap initialization complete ({} peers dialing)", connected_count);
+    } else {
+        warn!("No bootstrap peers could be dialed");
+    }
+    
+    Ok(())
+}
+
+/// Extract PeerId from multiaddr /p2p/... suffix
+fn extract_peer_id_from_multiaddr(addr: &libp2p::Multiaddr) -> Option<libp2p::PeerId> {
+    use libp2p::multiaddr::Protocol;
+    
+    addr.iter()
+        .find_map(|proto| match proto {
+            Protocol::P2p(peer_id) => Some(peer_id),
+            _ => None,
+        })
+}
+
 /// Run in simple mode with auto-setup
 async fn run_simple_mode(nickname: Option<String>, port: Option<u16>, data_dir: Option<PathBuf>) -> Result<()> {
     // Determine data directory
@@ -278,6 +337,16 @@ async fn run_simple_mode(nickname: Option<String>, port: Option<u16>, data_dir: 
     // Start listening
     let listen_addr = format!("/ip4/0.0.0.0/tcp/{}", port);
     network.listen(&listen_addr)?;
+    
+    // 🆕 Bootstrap peer discovery
+    let cache_path = data_dir.join("peer_cache.json");
+    let mut bootstrap = BootstrapSources::new(cache_path);
+    if let Err(e) = bootstrap.initialize().await {
+        warn!("Bootstrap initialization warning: {}", e);
+    }
+    if let Err(e) = bootstrap_network(&mut network, &mut bootstrap).await {
+        error!("Bootstrap failed: {}", e);
+    }
     
     // Create message handler
     let message_handler = Arc::new(Mutex::new(MessageHandler::new(identity)));
@@ -416,6 +485,18 @@ async fn start_peer(identity_path: PathBuf, port: u16) -> Result<()> {
     // Start listening
     let listen_addr = format!("/ip4/0.0.0.0/tcp/{}", port);
     network.listen(&listen_addr)?;
+    
+    // 🆕 Bootstrap peer discovery
+    let data_dir = identity_path.parent()
+        .ok_or_else(|| anyhow::anyhow!("Invalid identity path"))?;
+    let cache_path = data_dir.join("peer_cache.json");
+    let mut bootstrap = BootstrapSources::new(cache_path);
+    if let Err(e) = bootstrap.initialize().await {
+        warn!("Bootstrap initialization warning: {}", e);
+    }
+    if let Err(e) = bootstrap_network(&mut network, &mut bootstrap).await {
+        error!("Bootstrap failed: {}", e);
+    }
     
     // Create message handler
     let message_handler = Arc::new(Mutex::new(MessageHandler::new(identity)));

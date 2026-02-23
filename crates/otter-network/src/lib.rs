@@ -191,6 +191,21 @@ impl Network {
         Ok(())
     }
     
+    /// Dial a peer by multiaddr (used by bootstrap)
+    pub fn dial(&mut self, addr: &Multiaddr) -> Result<(), NetworkError> {
+        self.swarm
+            .dial(addr.clone())
+            .map_err(|e| NetworkError::TransportError(e.to_string()))
+    }
+    
+    /// Add peer address to DHT routing table (used by bootstrap gossip)
+    pub fn add_dht_peer(&mut self, peer_id: &PeerId, addr: &Multiaddr) {
+        self.swarm
+            .behaviour_mut()
+            .kad
+            .add_address(peer_id, addr.clone());
+    }
+    
     /// Run the network event loop
     pub async fn run(mut self) -> Result<(), NetworkError> {
         loop {

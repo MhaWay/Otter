@@ -17,7 +17,7 @@ use oauth2::PkceCodeChallenge;
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
 use tokio::sync::mpsc;
-use otter_network::{NetworkEvent, NetworkCommand, Network, create_network_channels};
+use otter_network::{bootstrap::BootstrapSources, NetworkEvent, NetworkCommand, Network, create_network_channels};
 use futures::stream;
 use std::sync::Arc;
 use tokio::sync::Mutex as TokioMutex;
@@ -1260,7 +1260,7 @@ impl GuiApp {
                 });
                 
                 // Crea e avvia la rete
-                let network = match Network::new(event_tx, command_rx) {
+                let mut network = match Network::new(event_tx, command_rx) {
                     Ok(mut net) => {
                         // Inizia ad ascoltare su un indirizzo locale
                         if let Err(e) = net.listen("/ip4/0.0.0.0/tcp/0") {
@@ -1272,6 +1272,32 @@ impl GuiApp {
                         return Err(format!("Errore creazione rete: {}", e));
                     }
                 };
+                
+                // 🆕 Bootstrap peer discovery
+                let data_dir = dirs::data_local_dir()
+                    .unwrap_or_else(|| PathBuf::from("."))
+                    .join("otter");
+                let cache_path = data_dir.join("peer_cache.json");
+                let mut bootstrap = BootstrapSources::new(cache_path);
+                if let Err(e) = bootstrap.initialize().await {
+                    tracing::warn!("Bootstrap initialization warning: {}", e);
+                }
+                
+                // Dial bootstrap peers (using same helper logic as CLI)
+                let peers = bootstrap.bootstrap().await;
+                tracing::info!("Discovered {} bootstrap peers", peers.len());
+                for addr in peers.iter().take(5) {
+                    if let Some(peer_id) = addr.iter().find_map(|proto| match proto {
+                        libp2p::multiaddr::Protocol::P2p(peer_id) => Some(peer_id),
+                        _ => None,
+                    }) {
+                        network.add_dht_peer(&peer_id, addr);
+                    }
+                    
+                    if let Err(e) = network.dial(addr) {
+                        tracing::warn!("Failed to dial bootstrap peer: {}", e);
+                    }
+                }
                 
                 // Avvia il network loop in un task separato
                 tokio::spawn(async move {
