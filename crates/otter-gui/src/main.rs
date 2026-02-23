@@ -1879,25 +1879,31 @@ Scorrendo verso il basso e facendo clic su \"Accetto\", riconosci che:\n\
             .into()
     }
 
-    fn view_saving(&self) -> Element<Message> {
-        let title = Text::new("Configurazione in corso...").size(36).font(ROBOTO_FONT);
-        
+    // Helper function to create animated SVG spinner
+    fn create_spinner(&self, size: f32, color: &str) -> Element<Message> {
         // SVG spinner with smooth rotation at 60fps (6° per frame = 60 frames for 360°)
         let angle = (self.spinner_frame * 6) % 360;
         let svg_content = format!(
             r##"<svg width="100" height="100" viewBox="0 0 50 50" xmlns="http://www.w3.org/2000/svg">
                 <g transform="rotate({} 25 25)">
-                    <path fill="#ffffff" d="M41.9 23.9c-.3-6.1-4-11.8-9.5-14.4-6-2.7-13.3-1.6-18.3 2.6-4.8 4-7 10.5-5.6 16.6 1.3 6 6 10.9 11.9 12.5 7.1 2 13.6-1.4 17.6-7.2-3.6 4.8-9.1 8-15.2 6.9-6.1-1.1-11.1-5.7-12.5-11.7-1.5-6.4 1.5-13.1 7.2-16.4 5.9-3.4 14.2-2.1 18.1 3.7 1 1.4 1.7 3.1 2 4.8.3 1.4.2 2.9.4 4.3.2 1.3 1.3 3 2.8 2.1 1.3-.8 1.2-2.5 1.1-3.8 0-.4.1.7 0 0z"/>
+                    <path fill="{}" d="M41.9 23.9c-.3-6.1-4-11.8-9.5-14.4-6-2.7-13.3-1.6-18.3 2.6-4.8 4-7 10.5-5.6 16.6 1.3 6 6 10.9 11.9 12.5 7.1 2 13.6-1.4 17.6-7.2-3.6 4.8-9.1 8-15.2 6.9-6.1-1.1-11.1-5.7-12.5-11.7-1.5-6.4 1.5-13.1 7.2-16.4 5.9-3.4 14.2-2.1 18.1 3.7 1 1.4 1.7 3.1 2 4.8.3 1.4.2 2.9.4 4.3.2 1.3 1.3 3 2.8 2.1 1.3-.8 1.2-2.5 1.1-3.8 0-.4.1.7 0 0z"/>
                 </g>
             </svg>"##,
-            angle
+            angle, color
         );
         
-        let spinner = Svg::new(
+        Svg::new(
             svg::Handle::from_memory(svg_content.into_bytes())
         )
-        .width(Length::Fixed(100.0))
-        .height(Length::Fixed(100.0));
+        .width(Length::Fixed(size))
+        .height(Length::Fixed(size))
+        .into()
+    }
+
+    fn view_saving(&self) -> Element<Message> {
+        let title = Text::new("Configurazione in corso...").size(36).font(ROBOTO_FONT);
+        
+        let spinner = self.create_spinner(100.0, "#ffffff");
         
         let content = Column::new()
             .push(Space::new().height(Length::Fill))
@@ -2373,19 +2379,12 @@ Scorrendo verso il basso e facendo clic su \"Accetto\", riconosci che:\n\
             
             // Mostra il loading indicator in fondo se la ricerca è in corso
             if self.peer_search_loading {
-                // Caratteri spinner animato
-                let spinner_chars = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-                let spinner_char = spinner_chars[self.spinner_frame % spinner_chars.len()];
-                
                 let loading_row = Row::new()
-                    .spacing(10)
+                    .spacing(15)
                     .padding(15)
                     .align_y(Alignment::Center)
                     .push(
-                        Text::new(spinner_char.to_string())
-                            .size(20)
-                            .font(ROBOTO_FONT)
-                            .color(Color::from_rgb(0.4, 0.6, 1.0))
+                        self.create_spinner(30.0, "#6699ff")
                     )
                     .push(
                         Text::new("Ricerca in corso...")
