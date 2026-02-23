@@ -39,6 +39,8 @@ futures = "0.3"
 libp2p = { version = "0.52", features = [
     "tokio",
     "tcp",
+    "dns",
+    "rsa",
     "noise",
     "yamux",
     "gossipsub",

@@ -8,8 +8,11 @@
 //! - Custom chat protocol
 //! - Peer information and routing
 //! - WebRTC transport with ICE negotiation for NAT traversal
+//! - Bootstrap peer discovery with DNS fallback
+//! - NAT traversal with AutoNAT and relay support
 
 pub mod webrtc;
+pub mod bootstrap;
 
 use futures::{prelude::*, select};
 use libp2p::{
