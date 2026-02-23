@@ -1,6 +1,7 @@
 //! Bootstrap module for peer discovery and network initialization
 //!
-//! This module implements a 3-tier bootstrap architecture:
+//! This module implements a 4-tier bootstrap architecture:
+//! - Tier 0: Hardcoded fallback peers (emergency when all else fails)
 //! - Tier 1: DNS multiaddr resolution from public domains (runtime)
 //! - Tier 2: Local peer cache (persistent, with TTL)
 //! - Tier 3: Peer gossip discovery (decentralized)
@@ -9,6 +10,7 @@
 //! - Self-sustaining (no dependency on bootstrap after initial connection)
 //! - Resilient (survives bootstrap node failures)
 //! - Fully decentralized (no proprietary servers)
+//! - Always accessible (hardcoded fallback guarantees connectivity)
 
 use libp2p::{Multiaddr, PeerId};
 use std::collections::HashMap;
@@ -40,6 +42,17 @@ pub const DNS_BOOTSTRAP_DOMAINS: &[&str] = &[
     "_dnsaddr.bootstrap.libp2p.io",
     "_dnsaddr.discovery.ipfs.io",
     "dnsaddr.bootstrap.libp2p.io",  // Fallback without underscore prefix
+];
+
+/// Hardcoded fallback bootstrap peers (Tier 0 - Emergency fallback)
+/// These are well-known IPFS bootstrap nodes that should always be available
+pub const HARDCODED_BOOTSTRAP_PEERS: &[&str] = &[
+    "/dnsaddr/bootstrap.libp2p.io/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN",
+    "/dnsaddr/bootstrap.libp2p.io/p2p/QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa",
+    "/dnsaddr/bootstrap.libp2p.io/p2p/QmbLHAnMoJPWSCR5Zhtx6BHJX9KiKNN6tpvbUcqanj75Nb",
+    "/dnsaddr/bootstrap.libp2p.io/p2p/QmcZf59bWwK5XFi76CZX8cbJ4BhTzzA3gU1ZjYZcYW3dwt",
+    "/ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ",
+    "/ip4/104.131.131.82/udp/4001/quic-v1/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ",
 ];
 
 /// Bootstrap peer entry with multiaddr
@@ -476,6 +489,23 @@ impl BootstrapSources {
                     error!("❌ Tier 1: DNS bootstrap failed: {}", e);
                 }
             }
+        }
+        
+        // Tier 0: Hardcoded fallback (emergency - when all else fails)
+        if all_addrs.is_empty() {
+            warn!("🆘 Tier 0: Using hardcoded fallback bootstrap peers");
+            for addr_str in HARDCODED_BOOTSTRAP_PEERS {
+                match Multiaddr::from_str(addr_str) {
+                    Ok(addr) => {
+                        info!("  ✓ Added hardcoded peer: {}", addr);
+                        all_addrs.push(addr);
+                    }
+                    Err(e) => {
+                        warn!("  ✗ Invalid hardcoded addr {}: {}", addr_str, e);
+                    }
+                }
+            }
+            info!("✅ Tier 0: Added {} hardcoded bootstrap peers", all_addrs.len());
         }
         
         // Tier 3: Gossip discovery happens after connection (in network layer)

@@ -1406,11 +1406,14 @@ impl GuiApp {
                         // Log bootstrap info
                         if peer_count == 0 {
                             self.loading_logs.push("⚠ Nessun peer bootstrap trovato!".to_string());
-                            self.loading_logs.push("  Causa: DNS fallito o cache vuota".to_string());
-                            self.loading_logs.push("  La rete sarà isolata".to_string());
+                            self.loading_logs.push("  Causa: DNS fallito o firewall blocca".to_string());
+                            self.loading_logs.push("  💡 Soluzione: Verifica connessione internet".to_string());
+                            self.loading_logs.push("  💡 Se dietro firewall: Apri porta TCP per DHT".to_string());
                         } else {
-                            self.loading_logs.push(format!("🔍 Bootstrap: {} peer scoperti", peer_count));
-                            self.loading_logs.push(format!("📞 Connessione ai primi 5 peer..."));
+                            self.loading_logs.push(format!("🌐 Trovati {} peer bootstrap pubblici", peer_count));
+                            self.loading_logs.push("   Contattando bootstrap per DHT query...".to_string());
+                            self.loading_logs.push("   ℹ️  Nota: Bootstrap si disconnette dopo ~60s".to_string());
+                            self.loading_logs.push("   ℹ️  Questo è NORMALE - DHT query finds real peers".to_string());
                         }
                         
                         // Passa subito a ListeningStarted
