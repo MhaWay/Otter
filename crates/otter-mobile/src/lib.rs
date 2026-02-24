@@ -16,7 +16,7 @@ use serde::{Serialize, Deserialize};
 use base64::Engine;
 
 use otter_identity::Identity;
-use otter_network::{Network, NetworkEvent};
+use otter_network::{Network, NetworkEvent, NetworkCommand};
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
 
@@ -28,6 +28,9 @@ static NETWORK: OnceLock<Arc<Mutex<Option<Network>>>> = OnceLock::new();
 
 /// Global event receiver
 static EVENT_RX: OnceLock<Arc<Mutex<Option<mpsc::Receiver<NetworkEvent>>>>> = OnceLock::new();
+
+/// Global command sender
+static COMMAND_TX: OnceLock<Arc<Mutex<Option<mpsc::Sender<NetworkCommand>>>>> = OnceLock::new();
 
 /// Global event callback
 static EVENT_CALLBACK: OnceLock<Arc<Mutex<Option<NetworkEventCallback>>>> = OnceLock::new();
@@ -57,6 +60,11 @@ fn get_network() -> Arc<Mutex<Option<Network>>> {
 /// Get event receiver
 fn get_event_rx() -> Arc<Mutex<Option<mpsc::Receiver<NetworkEvent>>>> {
     EVENT_RX.get_or_init(|| Arc::new(Mutex::new(None))).clone()
+}
+
+/// Get command sender
+fn get_command_tx() -> Arc<Mutex<Option<mpsc::Sender<NetworkCommand>>>> {
+    COMMAND_TX.get_or_init(|| Arc::new(Mutex::new(None))).clone()
 }
 
 /// Get event callback
@@ -223,10 +231,11 @@ pub extern "C" fn otter_mobile_start_network(identity_json: *const c_char) -> *c
     let runtime = get_runtime();
     let network_lock = get_network();
     let event_rx_lock = get_event_rx();
+    let command_tx_lock = get_command_tx();
     
     let result = runtime.block_on(async {
         let (event_tx, event_rx) = mpsc::channel(1000);
-        let (_command_tx, command_rx) = mpsc::channel(100);
+        let (command_tx, command_rx) = mpsc::channel(100);
         
         match Network::new(event_tx, command_rx) {
             Ok(network) => {
@@ -235,6 +244,9 @@ pub extern "C" fn otter_mobile_start_network(identity_json: *const c_char) -> *c
                 
                 let mut rx = event_rx_lock.lock().unwrap();
                 *rx = Some(event_rx);
+                
+                let mut tx = command_tx_lock.lock().unwrap();
+                *tx = Some(command_tx);
                 
                 // Send network started event
                 send_event("network_started", serde_json::json!({
@@ -339,19 +351,56 @@ async fn event_listener_task() {
 /// Returns: JSON array of peer info
 #[no_mangle]
 pub extern "C" fn otter_mobile_get_peers() -> *const c_char {
-    let network_lock = get_network();
-    let network_opt = network_lock.lock().unwrap();
+    let command_tx_lock = get_command_tx();
+    let command_tx_opt = command_tx_lock.lock().unwrap();
     
-    if let Some(_network) = network_opt.as_ref() {
-        // For now, return simplified peer list
-        // In future, implement proper peer tracking or query via command channel
-        let peers: Vec<serde_json::Value> = vec![];
+    if let Some(command_tx) = command_tx_opt.as_ref() {
+        let runtime = get_runtime();
         
-        let response = serde_json::json!({
-            "success": true,
-            "peers": peers
+        let result = runtime.block_on(async {
+            let (response_tx, mut response_rx) = mpsc::channel(1);
+            
+            if let Err(e) = command_tx.send(NetworkCommand::ListPeers { response: response_tx }).await {
+                return Err(format!("Failed to send ListPeers command: {}", e));
+            }
+            
+            match tokio::time::timeout(
+                tokio::time::Duration::from_secs(2),
+                response_rx.recv()
+            ).await {
+                Ok(Some(peer_ids)) => {
+                    let peers: Vec<serde_json::Value> = peer_ids
+                        .iter()
+                        .map(|peer_id| {
+                            serde_json::json!({
+                                "peer_id": peer_id.to_string(),
+                                "nickname": format!("Peer {}", &peer_id.to_string()[..8])
+                            })
+                        })
+                        .collect();
+                    Ok(peers)
+                }
+                Ok(None) => Err("Channel closed".to_string()),
+                Err(_) => Err("Timeout waiting for peer list".to_string()),
+            }
         });
-        return CString::new(response.to_string()).unwrap().into_raw();
+        
+        match result {
+            Ok(peers) => {
+                let response = serde_json::json!({
+                    "success": true,
+                    "peers": peers
+                });
+                return CString::new(response.to_string()).unwrap().into_raw();
+            }
+            Err(e) => {
+                let error = serde_json::json!({
+                    "success": false,
+                    "error": e
+                });
+                return CString::new(error.to_string()).unwrap().into_raw();
+            }
+        }
     }
     
     let error = serde_json::json!({
@@ -363,14 +412,90 @@ pub extern "C" fn otter_mobile_get_peers() -> *const c_char {
 
 /// Send message to topic
 #[no_mangle]
-pub extern "C" fn otter_mobile_send_message(_topic: *const c_char, _message: *const c_char) -> *const c_char {
-    // TODO: Implement message sending via gossipsub
-    // For now, just simulate success
-    let response = serde_json::json!({
-        "success": true,
-        "note": "Message sending not yet fully implemented"
+pub extern "C" fn otter_mobile_send_message(topic: *const c_char, message: *const c_char) -> *const c_char {
+    if topic.is_null() || message.is_null() {
+        let error = serde_json::json!({
+            "success": false,
+            "error": "Null topic or message pointer"
+        });
+        return CString::new(error.to_string()).unwrap().into_raw();
+    }
+    
+    let topic_str = unsafe {
+        match CStr::from_ptr(topic).to_str() {
+            Ok(s) => s.to_string(),
+            Err(_) => {
+                let error = serde_json::json!({
+                    "success": false,
+                    "error": "Invalid UTF-8 in topic"
+                });
+                return CString::new(error.to_string()).unwrap().into_raw();
+            }
+        }
+    };
+    
+    let message_str = unsafe {
+        match CStr::from_ptr(message).to_str() {
+            Ok(s) => s.to_string(),
+            Err(_) => {
+                let error = serde_json::json!({
+                    "success": false,
+                    "error": "Invalid UTF-8 in message"
+                });
+                return CString::new(error.to_string()).unwrap().into_raw();
+            }
+        }
+    };
+    
+    let command_tx_lock = get_command_tx();
+    let command_tx_opt = command_tx_lock.lock().unwrap();
+    
+    if let Some(command_tx) = command_tx_opt.as_ref() {
+        let runtime = get_runtime();
+        
+        let result = runtime.block_on(async {
+            let data = message_str.as_bytes().to_vec();
+            
+            // NOTE: 'to' parameter is ignored by Network - gossipsub broadcasts to all.
+            // Using a dummy PeerId since the field is required but not used for broadcast.
+            let dummy_peer_id = libp2p::PeerId::from_bytes(&[0; 32]).unwrap_or_else(|_| {
+                // If that fails, generate a temporary one
+                libp2p::PeerId::from(libp2p::identity::Keypair::generate_ed25519().public())
+            });
+            
+            if let Err(e) = command_tx.send(NetworkCommand::SendMessage {
+                to: dummy_peer_id,
+                data,
+            }).await {
+                return Err(format!("Failed to send message: {}", e));
+            }
+            
+            Ok(())
+        });
+        
+        match result {
+            Ok(_) => {
+                let response = serde_json::json!({
+                    "success": true,
+                    "topic": topic_str
+                });
+                return CString::new(response.to_string()).unwrap().into_raw();
+            }
+            Err(e) => {
+                let error = serde_json::json!({
+                    "success": false,
+                    "error": e
+                });
+                return CString::new(error.to_string()).unwrap().into_raw();
+            }
+        }
+    }
+    
+    let error = serde_json::json!({
+        "success": false,
+        "error": "Network not started"
     });
-    CString::new(response.to_string()).unwrap().into_raw()
+    CString::new(error.to_string()).unwrap().into_raw()
 }
 
 /// Stop network
