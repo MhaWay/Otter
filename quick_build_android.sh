@@ -12,12 +12,9 @@ FLUTTER_APP="$WORKSPACE_ROOT/flutter_app"
 # Build Rust for Android (arm64 only for speed)
 echo "🔨 Building Rust FFI for arm64-v8a..."
 cargo ndk \
-    --android-platform 21 \
-    --output "$FLUTTER_APP/android/app/src/main/jniLibs" \
-    build -p otter-mobile \
-    --lib \
-    --target aarch64-linux-android \
-    --release
+    -t arm64-v8a \
+    -o "$FLUTTER_APP/android/app/src/main/jniLibs" \
+    build -p otter-mobile --lib --release
 
 echo "✅ FFI library built!"
 ls -lh "$FLUTTER_APP/android/app/src/main/jniLibs/arm64-v8a/"
