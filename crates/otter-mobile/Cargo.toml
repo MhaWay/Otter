@@ -21,3 +21,4 @@ serde_json = "1"
 libp2p = { version = "0.52", features = ["gossipsub", "kad", "identify", "ping", "tcp", "noise", "yamux", "mdns"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+base64 = "0.21"

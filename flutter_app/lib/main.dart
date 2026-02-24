@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'lib/screens/home_screen.dart';
-import 'lib/screens/loading_screen.dart';
-import 'lib/screens/main_app_screen.dart';
-import 'lib/models/app_state.dart';
+import 'screens/home_screen.dart';
+import 'screens/loading_screen.dart';
+import 'screens/main_app_screen.dart';
+import 'models/app_state.dart';
 
 void main() {
   runApp(

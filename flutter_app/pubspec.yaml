@@ -12,6 +12,9 @@ dependencies:
   flutter:
     sdk: flutter
   
+  # FFI for Rust native library
+  ffi: ^2.1.0
+  
   # Networking & P2P (will be handled by Rust FFI backend)
   dio: ^5.3.0
   
