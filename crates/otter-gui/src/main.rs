@@ -35,6 +35,7 @@ static NETWORK_EVENTS: Lazy<(mpsc::UnboundedSender<NetworkEvent>, Arc<TokioMutex
 
 // OAuth proxy endpoint (server-side credentials on ggally.net)
 const OAUTH_PROXY_URL: &str = "https://ggally.net/oauth";
+#[allow(dead_code)]
 const REDIRECT_URI: &str = "http://localhost:8080";
 
 const ROBOTO_FONT: Font = Font::with_name("Roboto");
@@ -83,29 +84,22 @@ struct GoogleAuthData {
 
 #[derive(Clone, Debug, PartialEq)]
 enum LoadingStatus {
-    Initializing,           // Inizializzazione rete
-    ListeningStarted,       // Ascolto su porta locale
-    BootstrapConnecting,    // Connessione ai peer bootstrap
-    BootstrapCompleted,     // Almeno 1 peer connesso
-    SendingIdentity,        // Invio messaggio Identity
-    Ready,                  // Tutto pronto
+    Connecting,    // Connessione alla rete
+    Ready,         // Tutto pronto
 }
 
 impl LoadingStatus {
     fn message(&self) -> &str {
         match self {
-            LoadingStatus::Initializing => "Inizializzazione rete P2P...",
-            LoadingStatus::ListeningStarted => "Ascolto connessioni in corso...",
-            LoadingStatus::BootstrapConnecting => "Connessione ai peer bootstrap...",
-            LoadingStatus::BootstrapCompleted => "Peer connessi, sincronizzazione rete...",
-            LoadingStatus::SendingIdentity => "Invio identità sulla rete...",
+            LoadingStatus::Connecting => "Connessione alla rete P2P...",
             LoadingStatus::Ready => "Rete pronta, caricamento completato",
         }
     }
     
+    #[allow(dead_code)]
     fn message_with_retry(&self, retry: u32) -> String {
-        if retry > 0 && *self == LoadingStatus::BootstrapConnecting {
-            format!("Connessione ai peer bootstrap (tentativo {}/3)...", retry + 1)
+        if retry > 0 && *self == LoadingStatus::Connecting {
+            format!("Connessione alla rete (tentativo {}/3)...", retry + 1)
         } else {
             self.message().to_string()
         }
@@ -155,6 +149,7 @@ enum Message {
     PeerIdentityReceived { peer_id: String, nickname: Option<String> },
     NetworkStartInit,  // Inizio init della rete (dalla schermata Loading)
     UpdateLoadingStatus(LoadingStatus),  // Aggiorna stato caricamento
+    LoadingScreenTimeout,  // Timeout fallback (30 sec) se nessun NetworkReady
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -198,6 +193,7 @@ struct Contact {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct ContactRequest {
     peer_id: String,
     nickname: String,
@@ -217,6 +213,7 @@ enum Screen {
     MainApp,
 }
 
+#[allow(dead_code)]
 struct GuiApp {
     current_screen: Screen,
     has_reached_bottom: bool,
@@ -254,7 +251,7 @@ struct GuiApp {
 impl Default for GuiApp {
     fn default() -> Self {
         GuiApp {
-            current_screen: Screen::Home,
+            current_screen: Screen::Loading,
             has_reached_bottom: false,
             user_identity: None,
             otter_identity: None,
@@ -262,7 +259,7 @@ impl Default for GuiApp {
             google_auth_data: None,
             auth_error: None,
             spinner_frame: 0,
-            loading_status: LoadingStatus::Initializing,
+            loading_status: LoadingStatus::Connecting,
             loading_retry_count: 0,
             loading_logs: Vec::new(),
             current_tab: MainAppTab::Home,
@@ -291,6 +288,7 @@ impl Default for GuiApp {
 }
 
 impl GuiApp {
+    #[allow(dead_code)]
     fn init_discovered_peers_example() -> Vec<Contact> {
         // Temporary example peers for UI testing when network is not running
         vec![
@@ -423,33 +421,47 @@ impl GuiApp {
 
     fn new() -> (Self, Task<Message>) {
         let mut app = GuiApp::default();
-        if let Some(identity) = GuiApp::load_identity() {
+        
+        // Sempre mostra Loading screen all'avvio
+        app.current_screen = Screen::Loading;
+        app.loading_logs.push("🌐 Caricamento in corso...".to_string());
+        
+        // Controlla se identità e Google auth esistono
+        let identity = GuiApp::load_identity();
+        let google_auth = GuiApp::load_google_auth();
+        
+        if let Some(identity) = identity {
             app.user_identity = Some(identity);
             // Carica anche la vera otter identity
             app.otter_identity = GuiApp::load_otter_identity();
             
-            // Prova a caricare Google auth da cache
-            if let Some(google_auth) = GuiApp::load_google_auth() {
-                app.google_auth_data = Some(google_auth);
-                tracing::info!("Google auth caricato dalla cache");
+            if let Some(google_auth_data) = google_auth {
+                app.google_auth_data = Some(google_auth_data);
+                tracing::info!("Identità e Google auth trovati, avvio network...");
+                // Entrambi presenti, avvia il network
                 return (app, Task::done(Message::NetworkStartInit));
             } else {
-                // Se non c'è in cache, tenta di autenticarsi
-                tracing::info!("Google auth non in cache, tentando nuova autenticazione...");
-                return (app, Task::perform(
+                // Identità presente ma Google auth mancante, tenta autenticazione
+                tracing::info!("Identità trovata ma Google auth mancante, tentando autenticazione...");
+                let task = Task::perform(
                     GuiApp::perform_google_auth(),
                     |result| match result {
                         Ok(data) => Message::LoginGoogleAuthSuccess(data),
                         Err(e) => {
                             tracing::warn!("Google auth fallito all'avvio: {}", e);
-                            Message::NetworkStartInit
+                            // Se fallisce, vai a Home per registrazione
+                            Message::BackToHome
                         }
                     }
-                ));
+                );
+                return (app, task);
             }
         } else {
+            // Nessuna identità trovata, vai a Home per login/registrazione
+            tracing::info!("Nessuna identità trovata, andando a Home screen");
             app.current_screen = Screen::Home;
         }
+        
         (app, Task::none())
     }
 
@@ -1416,8 +1428,8 @@ impl GuiApp {
                             self.loading_logs.push("   ℹ️  Questo è NORMALE - DHT query finds real peers".to_string());
                         }
                         
-                        // Passa subito a ListeningStarted
-                        return Task::done(Message::UpdateLoadingStatus(LoadingStatus::ListeningStarted));
+                        // Passa subito a Connecting
+                        return Task::done(Message::UpdateLoadingStatus(LoadingStatus::Connecting));
                     }
                     Err(e) => {
                         tracing::error!("Errore avvio rete P2P: {}", e);
@@ -1431,65 +1443,55 @@ impl GuiApp {
                     NetworkEvent::ListeningOn { address } => {
                         tracing::info!("Network in ascolto su: {}", address);
                         self.loading_logs.push(format!("✓ In ascolto su {}", address));
-                        // Passa subito a BootstrapConnecting
-                        if self.loading_status == LoadingStatus::Initializing || 
-                           self.loading_status == LoadingStatus::ListeningStarted {
-                            self.loading_logs.push("→ Avvio connessione bootstrap...".to_string());
-                            return Task::done(Message::UpdateLoadingStatus(LoadingStatus::BootstrapConnecting));
-                        }
                     }
-                    NetworkEvent::PeerDiscovered { peer_id, addresses } => {
-                        tracing::info!("Peer scoperto: {} con indirizzi: {:?}", peer_id, addresses);
-                        
-                        let peer_id_str = peer_id.to_string();
-                        
-                        // Aggiungi ai discovered_peers se non presente
-                        if !self.discovered_peers.iter().any(|p| p.peer_id == peer_id_str) {
-                            // TODO: In futuro, richiedere nickname tramite protocollo Handshake
-                            // Per ora usa l'ID troncato come placeholder nickname
-                            let nickname = format!("Peer_{}", &peer_id_str[..8]);
-                            
+                    NetworkEvent::PeerOnline { peer_id, nickname, .. } => {
+                        let peer_short = format!("{}...{}", &peer_id.to_string()[..8], &peer_id.to_string()[peer_id.to_string().len()-6..]);
+                        tracing::info!("Peer online: {}", peer_id);
+                        self.loading_logs.push(format!("✓ Peer online: {}", peer_short));
+
+                        let display_name = nickname.unwrap_or_else(|| format!("Peer_{}", &peer_id.to_string()[..8]));
+
+                        if let Some(peer) = self.discovered_peers.iter_mut().find(|p| p.peer_id == peer_id.to_string()) {
+                            peer.is_online = true;
+                            peer.last_seen = Some("Online ora".to_string());
+                            peer.nickname = display_name;
+                        } else {
                             let contact = Contact {
-                                peer_id: peer_id_str,
-                                nickname,
+                                peer_id: peer_id.to_string(),
+                                nickname: display_name,
                                 avatar: None,
                                 status: ContactStatus::Accepted,
-                                last_seen: Some("Scoperto ora".to_string()),
+                                last_seen: Some("Online ora".to_string()),
                                 is_online: true,
                                 discovered_at: Some(chrono::Utc::now().to_rfc3339()),
                             };
                             self.discovered_peers.push(contact);
-                            
-                            // Aggiorna risultati di ricerca se c'è una query attiva
-                            if !self.peer_search_query.is_empty() {
-                                self.peer_search_results = self.simulate_peer_search(&self.peer_search_query);
+                        }
+
+                        if !self.peer_search_query.is_empty() {
+                            self.peer_search_results = self.simulate_peer_search(&self.peer_search_query);
+                        }
+
+                        // Invia identity al peer se disponibile
+                        if let (Some(ref cmd_tx), Some(ref identity), Some(ref otter_identity)) =
+                            (&self.network_command_tx, &self.user_identity, &self.otter_identity) {
+                            let public_identity = OtterPublicIdentity::from_identity_with_nickname(
+                                otter_identity,
+                                Some(identity.nickname.clone())
+                            );
+                            let otter_msg = OtterMessage::identity(public_identity);
+                            if let Ok(msg_bytes) = otter_msg.to_bytes() {
+                                let _ = cmd_tx.try_send(NetworkCommand::SendMessage {
+                                    to: peer_id,
+                                    data: msg_bytes,
+                                });
                             }
                         }
                     }
-                    NetworkEvent::PeerConnected { peer_id } => {
-                        tracing::info!("Peer connesso: {}", peer_id);
+                    NetworkEvent::PeerOffline { peer_id } => {
                         let peer_short = format!("{}...{}", &peer_id.to_string()[..8], &peer_id.to_string()[peer_id.to_string().len()-6..]);
-                        self.loading_logs.push(format!("✓ Peer connesso: {}", peer_short));
-                        
-                        // Aggiorna stato: bootstrap completed (prima connessione)
-                        if self.loading_status == LoadingStatus::BootstrapConnecting {
-                            // Reset retry counter quando connessione ha successo
-                            self.loading_retry_count = 0;
-                            self.loading_logs.push("✓ Bootstrap completato!".to_string());
-                            return Task::done(Message::UpdateLoadingStatus(LoadingStatus::BootstrapCompleted));
-                        }
-                        
-                        // Aggiorna stato online del peer
-                        if let Some(peer) = self.discovered_peers.iter_mut().find(|p| p.peer_id == peer_id.to_string()) {
-                            peer.is_online = true;
-                            peer.last_seen = Some("Online ora".to_string());
-                        }
-                    }
-                    NetworkEvent::PeerDisconnected { peer_id } => {
-                        tracing::info!("Peer disconnesso: {}", peer_id);
-                        let peer_short = format!("{}...{}", &peer_id.to_string()[..8], &peer_id.to_string()[peer_id.to_string().len()-6..]);
-                        self.loading_logs.push(format!("✗ Peer disconnesso: {}", peer_short));
-                        // Aggiorna stato offline del peer
+                        tracing::info!("Peer offline: {}", peer_id);
+                        self.loading_logs.push(format!("✗ Peer offline: {}", peer_short));
                         if let Some(peer) = self.discovered_peers.iter_mut().find(|p| p.peer_id == peer_id.to_string()) {
                             peer.is_online = false;
                             peer.last_seen = Some("Offline".to_string());
@@ -1513,6 +1515,36 @@ impl GuiApp {
                                 });
                             }
                         }
+                    }
+                    NetworkEvent::CachedPeersLoaded { count } => {
+                        // Phase 3: Cached peers loaded from previous session
+                        tracing::info!("📂 Caricate {} peer dalla cache", count);
+                        self.loading_logs.push(format!("📂 Caricate {} peer precedenti", count));
+                    }
+                    NetworkEvent::NetworkReady { mesh_peer_count } => {
+                        tracing::info!("Rete pronta (mesh peers: {})", mesh_peer_count);
+                        self.loading_logs.push(format!("✓ Rete pronta (mesh peers: {})", mesh_peer_count));
+                        return Task::done(Message::UpdateLoadingStatus(LoadingStatus::Ready));
+                    }
+                    NetworkEvent::NetworkDegraded { connected_count } => {
+                        tracing::warn!("Rete degradata (peer connessi: {})", connected_count);
+                        self.loading_logs.push(format!("⚠ Rete degradata (peer connessi: {})", connected_count));
+                    }
+                    NetworkEvent::DiscoveringPeers { connected_count } => {
+                        tracing::info!("Ricerca peer in corso (connessi: {})", connected_count);
+                        self.loading_logs.push(format!("🔍 Ricerca peer (connessi: {})", connected_count));
+                    }
+                    NetworkEvent::PeerQualityUpdate { peer_id, score } => {
+                        tracing::debug!("Quality update {} -> {:.2}", peer_id, score);
+                    }
+                    NetworkEvent::HealthReport { peer_count, error_rate, avg_latency_ms, dht_size } => {
+                        tracing::debug!(
+                            "Health report peers={} error_rate={:.3} latency={:?} dht={}",
+                            peer_count,
+                            error_rate,
+                            avg_latency_ms,
+                            dht_size
+                        );
                     }
                     _ => {
                         // Altri eventi di rete
@@ -1560,72 +1592,46 @@ impl GuiApp {
             Message::NetworkStartInit => {
                 tracing::info!("Inizio inizializzazione rete P2P");
                 self.current_screen = Screen::Loading;
-                self.loading_status = LoadingStatus::Initializing;
-                self.loading_logs.push("🚀 Inizializzazione rete P2P...".to_string());
+                self.loading_status = LoadingStatus::Connecting;
+                self.loading_logs.push("🚀 Connessione alla rete P2P...".to_string());
                 self.auth_error = None;
-                return Self::start_network_task();
+                
+                // Timeout fallback: 14 sec per connessione DHT
+                // Se dopo 14 sec niente NetworkReady, passa a MainApp anyway (isolato ma funzionale)
+                let fallback_timeout = Task::perform(
+                    async {
+                        tokio::time::sleep(tokio::time::Duration::from_secs(14)).await;
+                    },
+                    |_| Message::LoadingScreenTimeout
+                );
+                
+                let network_task = Self::start_network_task();
+                
+                return Task::batch([fallback_timeout, network_task]);
             }
             
             Message::UpdateLoadingStatus(status) => {
                 self.loading_status = status.clone();
                 tracing::debug!("Loading status: {}", status.message());
                 
-                // Timeout di fallback per ogni stato (se non riceve eventi, procede comunque)
                 match status {
-                    LoadingStatus::ListeningStarted => {
-                        // Fallback: se dopo 3s non riceve ListeningOn, passa a BootstrapConnecting
-                        return Task::perform(
-                            async {
-                                tokio::time::sleep(tokio::time::Duration::from_millis(3000)).await;
-                            },
-                            |_| Message::UpdateLoadingStatus(LoadingStatus::BootstrapConnecting)
-                        );
-                    }
-                    LoadingStatus::BootstrapConnecting => {
-                        // Nessun retry - stop al primo errore
-                        tracing::error!("Bootstrap timeout - nessun peer connesso");
-                        self.loading_logs.push("✗ Bootstrap timeout - nessun peer risponde".to_string());
-                        self.loading_logs.push("❌ ERRORE: Impossibile connettersi alla rete".to_string());
-                        self.loading_logs.push("   Verifica connessione internet e riprova".to_string());
-                        
-                        // Stop qui - non procede
-                        return Task::none();
-                    }
-                    LoadingStatus::BootstrapCompleted => {
-                        // Invia l'identity message
-                        if let (Some(ref cmd_tx), Some(ref identity), Some(ref otter_identity)) = 
-                            (&self.network_command_tx, &self.user_identity, &self.otter_identity) {
-                            
-                            // Crea PublicIdentity con nickname
-                            let public_identity = OtterPublicIdentity::from_identity_with_nickname(
-                                otter_identity,
-                                Some(identity.nickname.clone())
-                            );
-                            
-                            // Crea il messaggio Identity
-                            let otter_msg = OtterMessage::identity(public_identity);
-                            
-                            // Serializza e invia
-                            if let Ok(msg_bytes) = otter_msg.to_bytes() {
-                                let dummy_peer_id = libp2p::PeerId::random();
-                                if let Ok(_) = cmd_tx.try_send(NetworkCommand::SendMessage {
-                                    to: dummy_peer_id,
-                                    data: msg_bytes,
-                                }) {
-                                    tracing::info!("Identity message inviato per: {}", identity.nickname);
-                                    self.loading_logs.push(format!("✓ Identity inviata: {}", identity.nickname));
-                                    
-                                    // Passa direttamente a Ready
-                                    return Task::done(Message::UpdateLoadingStatus(LoadingStatus::Ready));
-                                }
-                            }
-                        }
+                    LoadingStatus::Connecting => {
+                        // Aspetta gli eventi di rete reali, non timeout arbitrari
+                        // Il passaggio a Ready avviene solo via NetworkEvent::NetworkReady
                     }
                     LoadingStatus::Ready => {
                         // Passa a MainApp
                         return Task::done(Message::NetworkReady);
                     }
-                    _ => {}
+                }
+            }
+            Message::LoadingScreenTimeout => {
+                if self.current_screen == Screen::Loading {
+                    tracing::warn!("⏱️ Loading screen timeout (14s) - rete potrebbe essere isolata, passando a MainApp");
+                    self.loading_logs.push("⏱️ Timeout connessione (14s) - continuando comunque...".to_string());
+                    self.loading_logs.push("ℹ️ Nota: Potresti essere isolato (nessun DHT peer raggiungibile)".to_string());
+                    self.loading_logs.push("💡 Aspetta altri peer o mDNS locale per connessi".to_string());
+                    return Task::done(Message::NetworkReady);
                 }
             }
         }
@@ -1669,6 +1675,12 @@ impl GuiApp {
                     .unwrap_or_else(|| PathBuf::from("."))
                     .join("otter");
                 let cache_path = data_dir.join("peer_cache.json");
+
+                // Phase 3: Load cached peers from previous sessions
+                if let Err(e) = network.load_cached_peers(cache_path.clone()).await {
+                    tracing::warn!("Failed to load cached peers: {}", e);
+                }
+
                 let mut bootstrap = BootstrapSources::new(cache_path);
                 if let Err(e) = bootstrap.initialize().await {
                     tracing::warn!("Bootstrap initialization warning: {}", e);
@@ -1722,7 +1734,7 @@ impl GuiApp {
     
     // Cerca peer scoperti nella rete P2P
     // Attualmente cerca tra i discovered_peers (simulati)
-    // TODO: In futuro, discovered_peers sarà popolato da eventi NetworkEvent::PeerDiscovered
+    // TODO: In futuro, discovered_peers sarà popolato da eventi NetworkEvent::PeerOnline
     fn simulate_peer_search(&self, query: &str) -> Vec<Contact> {
         if query.trim().is_empty() {
             return Vec::new();
@@ -1787,7 +1799,7 @@ impl GuiApp {
         Subscription::batch([spinner_sub, mouse_sub, network_sub])
     }
 
-    fn view(&self) -> Element<Message> {
+    fn view(&self) -> Element<'_, Message> {
         match self.current_screen {
             Screen::Home => self.view_home(),
             Screen::Disclaimer => self.view_disclaimer(),
@@ -1799,7 +1811,7 @@ impl GuiApp {
         }
     }
 
-    fn view_home(&self) -> Element<Message> {
+    fn view_home(&self) -> Element<'_, Message> {
         let title = Text::new("🦦 Otter").size(64).font(ROBOTO_FONT).shaping(text::Shaping::Advanced);
 
         let question = Text::new("Hai già un'identità?").size(22).font(ROBOTO_FONT);
@@ -1895,7 +1907,7 @@ impl GuiApp {
             .into()
     }
 
-    fn view_disclaimer(&self) -> Element<Message> {
+    fn view_disclaimer(&self) -> Element<'_, Message> {
         let title = Text::new("📋 Termini di Servizio e Disclaimer").size(36).font(ROBOTO_FONT).shaping(text::Shaping::Advanced);
 
         let disclaimer_text = "\
@@ -2057,7 +2069,7 @@ Scorrendo verso il basso e facendo clic su \"Accetto\", riconosci che:\n\
             .into()
     }
 
-    fn view_google_auth(&self) -> Element<Message> {
+    fn view_google_auth(&self) -> Element<'_, Message> {
         let title = Text::new("🔐 Accedi con Google").size(44).font(ROBOTO_FONT).shaping(text::Shaping::Advanced);
         
         let subtitle = Text::new("Autentica il tuo account Google per continuare").size(18).font(ROBOTO_FONT);
@@ -2148,7 +2160,7 @@ Scorrendo verso il basso e facendo clic su \"Accetto\", riconosci che:\n\
             .into()
     }
 
-    fn view_choose_nickname(&self) -> Element<Message> {
+    fn view_choose_nickname(&self) -> Element<'_, Message> {
         let title = Text::new("✨ Scegli il Tuo Nickname").size(40).font(ROBOTO_FONT).shaping(text::Shaping::Advanced);
         let subtitle = Text::new("Questo sarà il nome con cui gli altri ti riconosceranno").size(16).font(ROBOTO_FONT);
 
@@ -2261,7 +2273,7 @@ Scorrendo verso il basso e facendo clic su \"Accetto\", riconosci che:\n\
     }
 
     // Helper function to create animated SVG spinner
-    fn create_spinner(&self, size: f32, color: &str) -> Element<Message> {
+    fn create_spinner(&self, size: f32, color: &str) -> Element<'_, Message> {
         // SVG spinner with smooth rotation at 60fps (6° per frame = 60 frames for 360°)
         let angle = (self.spinner_frame * 6) % 360;
         let svg_content = format!(
@@ -2281,7 +2293,7 @@ Scorrendo verso il basso e facendo clic su \"Accetto\", riconosci che:\n\
         .into()
     }
 
-    fn view_saving(&self) -> Element<Message> {
+    fn view_saving(&self) -> Element<'_, Message> {
         let title = Text::new("Configurazione in corso...").size(36).font(ROBOTO_FONT);
         
         let spinner = self.create_spinner(100.0, "#ffffff");
@@ -2305,7 +2317,7 @@ Scorrendo verso il basso e facendo clic su \"Accetto\", riconosci che:\n\
             .into()
     }
 
-    fn view_loading(&self) -> Element<Message> {
+    fn view_loading(&self) -> Element<'_, Message> {
         let title = Text::new("🌐 Connessione alla rete...").size(36).font(ROBOTO_FONT);
         
         let status = Text::new(self.loading_status.message())
@@ -2376,7 +2388,7 @@ Scorrendo verso il basso e facendo clic su \"Accetto\", riconosci che:\n\
             .into()
     }
 
-    fn view_main_app(&self) -> Element<Message> {
+    fn view_main_app(&self) -> Element<'_, Message> {
         // Sidebar con icone rotonde
         let sidebar = self.view_sidebar();
         
@@ -2427,7 +2439,7 @@ Scorrendo verso il basso e facendo clic su \"Accetto\", riconosci che:\n\
             .into()
     }
     
-    fn view_sidebar(&self) -> Element<Message> {
+    fn view_sidebar(&self) -> Element<'_, Message> {
         let sidebar_width = if self.sidebar_expanded { self.sidebar_width } else { 80.0 };
         
         // Pulsante Home (Base Page)
@@ -2535,7 +2547,7 @@ Scorrendo verso il basso e facendo clic su \"Accetto\", riconosci che:\n\
             .into()
     }
     
-    fn create_sidebar_button(&self, icon: &str, tab: MainAppTab, label: &str) -> Element<Message> {
+    fn create_sidebar_button(&self, icon: &str, tab: MainAppTab, label: &str) -> Element<'_, Message> {
         let is_active = self.current_tab == tab;
         let icon_str = icon.to_string();
         let label_str = label.to_string();
@@ -2660,7 +2672,7 @@ Scorrendo verso il basso e facendo clic su \"Accetto\", riconosci che:\n\
         }
     }
     
-    fn view_home_tab(&self) -> Element<Message> {
+    fn view_home_tab(&self) -> Element<'_, Message> {
         let title = Text::new("🏠 Home - Novità e Informazioni")
             .size(32)
             .font(ROBOTO_FONT)
@@ -2693,7 +2705,7 @@ Scorrendo verso il basso e facendo clic su \"Accetto\", riconosci che:\n\
             .into()
     }
     
-    fn view_contacts_tab(&self) -> Element<Message> {
+    fn view_contacts_tab(&self) -> Element<'_, Message> {
         let title = Text::new("👥 Contatti")
             .size(32)
             .font(ROBOTO_FONT)
@@ -2736,7 +2748,7 @@ Scorrendo verso il basso e facendo clic su \"Accetto\", riconosci che:\n\
             .into()
     }
     
-    fn create_contacts_tab_button(&self, label: &str, sub_tab: ContactsSubTab) -> Element<Message> {
+    fn create_contacts_tab_button(&self, label: &str, sub_tab: ContactsSubTab) -> Element<'_, Message> {
         let is_active = self.contacts_sub_tab == sub_tab;
         let label_str = label.to_string();
         
@@ -2778,7 +2790,7 @@ Scorrendo verso il basso e facendo clic su \"Accetto\", riconosci che:\n\
         .into()
     }
     
-    fn view_contacts_list(&self) -> Element<Message> {
+    fn view_contacts_list(&self) -> Element<'_, Message> {
         let mut content = Column::new().spacing(10);
         
         if self.contacts_list.is_empty() {
@@ -2802,7 +2814,7 @@ Scorrendo verso il basso e facendo clic su \"Accetto\", riconosci che:\n\
             .into()
     }
     
-    fn view_add_contact(&self) -> Element<Message> {
+    fn view_add_contact(&self) -> Element<'_, Message> {
         let search_input = TextInput::new(
             "Cerca per ID o Nickname...",
             &self.peer_search_query
@@ -2870,7 +2882,7 @@ Scorrendo verso il basso e facendo clic su \"Accetto\", riconosci che:\n\
             .into()
     }
     
-    fn view_pending_requests(&self) -> Element<Message> {
+    fn view_pending_requests(&self) -> Element<'_, Message> {
         let mut content = Column::new().spacing(10);
         
         if self.contact_requests.is_empty() {
@@ -2892,7 +2904,7 @@ Scorrendo verso il basso e facendo clic su \"Accetto\", riconosci che:\n\
             .into()
     }
     
-    fn view_blocked_contacts(&self) -> Element<Message> {
+    fn view_blocked_contacts(&self) -> Element<'_, Message> {
         let mut content = Column::new().spacing(10);
         
         if self.blocked_contacts.is_empty() {
@@ -3190,7 +3202,7 @@ Scorrendo verso il basso e facendo clic su \"Accetto\", riconosci che:\n\
         .into()
     }
     
-    fn view_profile_tab(&self) -> Element<Message> {
+    fn view_profile_tab(&self) -> Element<'_, Message> {
         let title = Text::new("👤 Profilo")
             .size(32)
             .font(ROBOTO_FONT)
@@ -3266,7 +3278,7 @@ Scorrendo verso il basso e facendo clic su \"Accetto\", riconosci che:\n\
             .into()
     }
     
-    fn view_settings_tab(&self) -> Element<Message> {
+    fn view_settings_tab(&self) -> Element<'_, Message> {
         let title = Text::new("⚙️ Impostazioni")
             .size(32)
             .font(ROBOTO_FONT)

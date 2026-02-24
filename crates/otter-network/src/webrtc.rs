@@ -9,7 +9,6 @@
 //! - Fallback relay mechanisms
 
 use serde::{Deserialize, Serialize};
-use std::net::SocketAddr;
 use thiserror::Error;
 
 #[derive(Error, Debug)]

@@ -108,6 +108,7 @@ pub enum CallState {
 
 /// Active call information
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct CallSession {
     /// Session ID
     pub session_id: String,

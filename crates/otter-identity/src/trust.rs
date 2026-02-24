@@ -8,7 +8,9 @@
 //! - Key change warnings
 //! - Device approval flow
 
-use crate::{DeviceId, DeviceKey, Identity, PeerId, PublicIdentity};
+use crate::{DeviceId, DeviceKey, PeerId, PublicIdentity};
+#[allow(unused_imports)] // Required by tests
+use crate::Identity;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

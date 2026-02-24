@@ -9,14 +9,13 @@
 //! - Conversation management
 
 use chrono::{DateTime, Utc};
-use libp2p::PeerId;
 use otter_crypto::{CryptoSession, EncryptedMessage, MessageCrypto};
 use otter_identity::{Identity, PublicIdentity};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use thiserror::Error;
 use tokio::sync::mpsc;
-use tracing::{debug, info, warn};
+use tracing::info;
 
 #[derive(Error, Debug)]
 pub enum MessagingError {

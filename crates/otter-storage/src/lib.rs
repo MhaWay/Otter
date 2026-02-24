@@ -10,7 +10,7 @@
 //! - Session state management
 //! - Peer cache persistence
 
-use otter_identity::{Identity, PublicIdentity, trust::TrustStore};
+use otter_identity::{PublicIdentity, trust::TrustStore};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

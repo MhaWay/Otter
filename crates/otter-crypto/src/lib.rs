@@ -194,6 +194,7 @@ impl CryptoSession {
 /// - Ephemeral X25519 key pairs for each session
 /// - Key ratcheting on message exchange
 /// - Message counter for replay protection
+#[allow(dead_code)]
 pub struct PFSSession {
     /// Static identity-based shared secret (for authentication)
     static_secret: SharedSecret,

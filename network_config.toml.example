@@ -1,0 +1,10 @@
+# Otter network configuration
+# Copy to ~/.otter/network_config.toml and edit as needed.
+
+min_peers = 3
+max_peers = 20
+target_peers = 12
+
+discovery_throttle_secs = 30
+heartbeat_interval_secs = 15
+heartbeat_freshness_secs = 60

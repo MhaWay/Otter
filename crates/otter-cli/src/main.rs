@@ -338,8 +338,15 @@ async fn run_simple_mode(nickname: Option<String>, port: Option<u16>, data_dir: 
     let listen_addr = format!("/ip4/0.0.0.0/tcp/{}", port);
     network.listen(&listen_addr)?;
     
-    // 🆕 Bootstrap peer discovery
+    // 🆕 Bootstrap peer discovery (Phase 1-3)
     let cache_path = data_dir.join("peer_cache.json");
+    
+    // Phase 3: Load cached peers from previous sessions
+    if let Err(e) = network.load_cached_peers(cache_path.clone()).await {
+        warn!("Failed to load cached peers: {}", e);
+    }
+    
+    // Phase 1: Bootstrap peer discovery
     let mut bootstrap = BootstrapSources::new(cache_path);
     if let Err(e) = bootstrap.initialize().await {
         warn!("Bootstrap initialization warning: {}", e);
@@ -636,9 +643,13 @@ async fn handle_network_event(
             }
         }
         
-        NetworkEvent::PeerConnected { peer_id } => {
-            info!("Connected to peer: {}", peer_id);
-            println!("\n✓ Connected: {}", peer_id);
+        NetworkEvent::PeerOnline { peer_id, nickname, .. } => {
+            info!("Peer online: {}", peer_id);
+            if let Some(name) = nickname {
+                println!("\n✓ Online: {} ({})", name, peer_id);
+            } else {
+                println!("\n✓ Online: {}", peer_id);
+            }
             
             // Send identity with a delay as fallback
             // (in case PeerReadyForMessages doesn't fire)
@@ -694,9 +705,9 @@ async fn handle_network_event(
             }
         }
         
-        NetworkEvent::PeerDisconnected { peer_id } => {
-            info!("Disconnected from peer: {}", peer_id);
-            println!("\n✗ Disconnected: {}", peer_id);
+        NetworkEvent::PeerOffline { peer_id } => {
+            info!("Peer offline: {}", peer_id);
+            println!("\n✗ Offline: {}", peer_id);
         }
         
         NetworkEvent::MessageReceived { from, data } => {
@@ -782,6 +793,37 @@ async fn handle_network_event(
         
         NetworkEvent::ListeningOn { address } => {
             println!("Listening on: {}", address);
+        }
+
+        NetworkEvent::NetworkReady { mesh_peer_count } => {
+            println!("\n✓ Network ready (mesh peers: {})", mesh_peer_count);
+        }
+
+        NetworkEvent::NetworkDegraded { connected_count } => {
+            warn!("Network degraded (connected peers: {})", connected_count);
+            println!("\n⚠ Network degraded (connected peers: {})", connected_count);
+        }
+
+        NetworkEvent::DiscoveringPeers { connected_count } => {
+            info!("Discovering peers (connected: {})", connected_count);
+            println!("\n🔍 Discovering peers (connected: {})", connected_count);
+        }
+
+        NetworkEvent::PeerQualityUpdate { peer_id, score } => {
+            debug!("Peer quality update {} -> {:.2}", peer_id, score);
+        }
+
+        NetworkEvent::HealthReport { peer_count, error_rate, avg_latency_ms, dht_size } => {
+            debug!("Health report peers={} error_rate={:.3} latency={:?} dht={}",
+                peer_count, error_rate, avg_latency_ms, dht_size);
+        }
+        
+        NetworkEvent::CachedPeersLoaded { count } => {
+            // Phase 3: Cached peers loaded from previous session
+            if count > 0 {
+                info!("📂 Loaded {} cached peers from previous session", count);
+                println!("\n📂 Loaded {} cached peers", count);
+            }
         }
     }
     

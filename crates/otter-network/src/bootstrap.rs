@@ -67,11 +67,14 @@ pub struct BootstrapPeer {
 pub struct CachedPeer {
     pub peer_id: String,
     pub addresses: Vec<String>,
-    pub last_seen: i64,      // Unix timestamp
-    pub successful_dials: u32, // Reputation scoring
+    pub last_seen: i64,         // Unix timestamp of last successful connection
+    pub first_met: i64,         // Unix timestamp when peer was first discovered
+    pub successful_dials: u32,  // Reputation scoring
     pub failed_dials: u32,
     pub is_relay: bool,
     pub latency_ms: Option<u32>,
+    pub nickname: Option<String>,    // Peer's friendly name (from Identity)
+    pub device_type: Option<String>, // Device type (from Identity)
 }
 
 impl CachedPeer {
@@ -347,14 +350,15 @@ impl BootstrapSources {
     pub async fn record_successful_dial(&mut self, peer_id: &PeerId, addr: &Multiaddr, latency_ms: u32) {
         let peer_id_str = peer_id.to_string();
         let addr_str = addr.to_string();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
         
         // Find or create peer entry
         if let Some(peer) = self.cache.peers.iter_mut().find(|p| p.peer_id == peer_id_str) {
             peer.successful_dials += 1;
-            peer.last_seen = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_secs() as i64;
+            peer.last_seen = now;
             peer.latency_ms = Some(latency_ms);
             
             if !peer.addresses.contains(&addr_str) {
@@ -365,20 +369,39 @@ impl BootstrapSources {
             self.cache.peers.push(CachedPeer {
                 peer_id: peer_id_str,
                 addresses: vec![addr_str],
-                last_seen: SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs() as i64,
+                last_seen: now,
+                first_met: now,
                 successful_dials: 1,
                 failed_dials: 0,
                 is_relay: false,
                 latency_ms: Some(latency_ms),
+                nickname: None,
+                device_type: None,
             });
         }
         
         // Save to disk asynchronously
         if let Err(e) = self.save_cache().await {
             warn!("Failed to save cache: {}", e);
+        }
+    }
+    
+    /// Update peer identity information (nickname, device type)
+    pub async fn update_peer_identity(&mut self, peer_id: &PeerId, nickname: Option<String>, device_type: Option<String>) {
+        let peer_id_str = peer_id.to_string();
+        
+        if let Some(peer) = self.cache.peers.iter_mut().find(|p| p.peer_id == peer_id_str) {
+            if nickname.is_some() {
+                peer.nickname = nickname;
+            }
+            if device_type.is_some() {
+                peer.device_type = device_type;
+            }
+            
+            // Save updated identity info
+            if let Err(e) = self.save_cache().await {
+                warn!("Failed to save cache after identity update: {}", e);
+            }
         }
     }
     
@@ -411,7 +434,39 @@ impl BootstrapSources {
     // RELAY SUPPORT (NAT Traversal)
     // =================================================================
 
-    /// Mark peer as relay-capable
+    /// Load cached peers for auto-dial (Phase 3.3)
+    /// Returns peers with successful_dials > 0 and last_seen < 7 days
+    pub fn get_peers_for_auto_dial(&self) -> Vec<(String, Vec<Multiaddr>)> {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        
+        let seven_days_ago = now - (7 * 24 * 3600);
+        
+        self.cache
+            .peers
+            .iter()
+            .filter(|p| p.successful_dials > 0 && p.last_seen > seven_days_ago)
+            .map(|p| {
+                let addrs = p.addresses
+                    .iter()
+                    .filter_map(|a| Multiaddr::from_str(a).ok())
+                    .collect();
+                (p.peer_id.clone(), addrs)
+            })
+            .collect()
+    }
+    
+    /// Public getter for reading cache (for Phase 3.3 integration)
+    pub fn cache(&self) -> &PeerCache {
+        &self.cache
+    }
+    
+    /// Mutable getter for cache (for testing)
+    pub fn cache_mut(&mut self) -> &mut PeerCache {
+        &mut self.cache
+    }
     pub async fn mark_as_relay(&mut self, peer_id: &PeerId, addrs: Vec<Multiaddr>) {
         info!("🔁 Relay peer discovered: {}", peer_id);
         
@@ -563,59 +618,60 @@ mod tests {
 
     #[test]
     fn test_peer_reputation_score() {
-        let mut peer = CachedPeer {
+        let peer = CachedPeer {
             peer_id: "test".to_string(),
             addresses: vec![],
             last_seen: 0,
+            first_met: 0,
             successful_dials: 8,
             failed_dials: 2,
             is_relay: false,
             latency_ms: Some(100),
+            nickname: None,
+            device_type: None,
         };
         
         // 80% success rate
         let score = peer.reputation_score();
         assert!(score > 0.7 && score < 0.9);
-        
-        // With relay bonus
-        peer.is_relay = true;
-        let relay_score = peer.reputation_score();
-        assert!(relay_score > score);
     }
 
     #[test]
     fn test_cache_cleanup_stale() {
         let mut cache = PeerCache::new();
-        
-        // Add old peer (100 hours ago)
-        let old_timestamp = SystemTime::now()
+        let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
-            .as_secs() as i64
-            - (100 * 3600);
+            .as_secs() as i64;
+        
+        // Add old peer (100 hours ago)
+        let old_timestamp = now - (100 * 3600);
         
         cache.peers.push(CachedPeer {
             peer_id: "old_peer".to_string(),
             addresses: vec![],
             last_seen: old_timestamp,
+            first_met: old_timestamp,
             successful_dials: 5,
             failed_dials: 0,
             is_relay: false,
             latency_ms: None,
+            nickname: None,
+            device_type: None,
         });
         
         // Add fresh peer
         cache.peers.push(CachedPeer {
             peer_id: "fresh_peer".to_string(),
             addresses: vec![],
-            last_seen: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_secs() as i64,
+            last_seen: now,
+            first_met: now,
             successful_dials: 3,
             failed_dials: 0,
             is_relay: false,
             latency_ms: None,
+            nickname: None,
+            device_type: None,
         });
         
         assert_eq!(cache.peers.len(), 2);

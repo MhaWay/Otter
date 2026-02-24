@@ -74,6 +74,31 @@ Otter is built as a Rust workspace with eight core crates:
    - Identity management
    - Network control
 
+### Network Overview (Mermaid)
+
+```mermaid
+graph TD
+   A[GUI/CLI] -->|NetworkCommand| B[otter-network]
+   B -->|NetworkEvent| A
+   B --> C[Kademlia DHT]
+   B --> D[Gossipsub]
+   B --> E[mDNS]
+   B --> F[Peer Cache]
+   C --> G[Mesh Peers]
+   D --> G
+   F --> G
+```
+
+### Network Events (High-Level)
+
+- `NetworkReady { mesh_peer_count }`
+- `PeerOnline { peer_id, nickname, avatar }`
+- `PeerOffline { peer_id }`
+- `NetworkDegraded { connected_count }`
+- `DiscoveringPeers { connected_count }`
+- `PeerQualityUpdate { peer_id, score }`
+- `HealthReport { peer_count, error_rate, avg_latency_ms, dht_size }`
+
 ## Technology Stack
 
 - **Language**: Rust 2021 edition
@@ -175,6 +200,22 @@ Each peer automatically generates a unique identity on first run, stored in `~/.
 - **Peer ID**: A unique identifier derived from your Ed25519 public key
 - **Fingerprint**: A short hash for quick verification
 - **Keys**: Ed25519 for signing, X25519 for encryption
+
+### Network Configuration
+
+Otter reads optional settings from `~/.otter/network_config.toml`. If the file is missing, defaults are used.
+
+Example (see `network_config.toml.example` in the repo):
+
+```toml
+min_peers = 3
+max_peers = 20
+target_peers = 12
+
+discovery_throttle_secs = 30
+heartbeat_interval_secs = 15
+heartbeat_freshness_secs = 60
+```
 
 ## Development
 
