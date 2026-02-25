@@ -213,6 +213,23 @@ enum Screen {
     MainApp,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum NetworkState {
+    Connecting,
+    Ready,
+    Degraded,
+    Error,
+}
+
+#[derive(Debug, Clone)]
+struct NetworkHealthReport {
+    peer_count: usize,
+    error_rate: f64,
+    avg_latency_ms: Option<u32>,
+    dht_size: usize,
+    timestamp: String,
+}
+
 #[allow(dead_code)]
 struct GuiApp {
     current_screen: Screen,
@@ -246,6 +263,13 @@ struct GuiApp {
     
     // Network P2P
     network_command_tx: Option<mpsc::Sender<NetworkCommand>>,
+    
+    // Network Status Dashboard
+    network_state: NetworkState,
+    network_health_report: Option<NetworkHealthReport>,
+    bootstrap_connected_count: usize,
+    listening_addresses: Vec<String>,
+    network_start_time: Option<std::time::Instant>,
 }
 
 impl Default for GuiApp {
@@ -283,6 +307,13 @@ impl Default for GuiApp {
             
             // Network P2P
             network_command_tx: None,
+            
+            // Network Status Dashboard
+            network_state: NetworkState::Connecting,
+            network_health_report: None,
+            bootstrap_connected_count: 0,
+            listening_addresses: Vec::new(),
+            network_start_time: Some(std::time::Instant::now()),
         }
     }
 }
@@ -1443,6 +1474,10 @@ impl GuiApp {
                     NetworkEvent::ListeningOn { address } => {
                         tracing::info!("Network in ascolto su: {}", address);
                         self.loading_logs.push(format!("✓ In ascolto su {}", address));
+                        // Traccia gli indirizzi di ascolto
+                        if !self.listening_addresses.contains(&address) {
+                            self.listening_addresses.push(address);
+                        }
                     }
                     NetworkEvent::PeerOnline { peer_id, nickname, .. } => {
                         let peer_short = format!("{}...{}", &peer_id.to_string()[..8], &peer_id.to_string()[peer_id.to_string().len()-6..]);
@@ -1524,11 +1559,14 @@ impl GuiApp {
                     NetworkEvent::NetworkReady { mesh_peer_count } => {
                         tracing::info!("Rete pronta (mesh peers: {})", mesh_peer_count);
                         self.loading_logs.push(format!("✓ Rete pronta (mesh peers: {})", mesh_peer_count));
+                        self.network_state = NetworkState::Ready;
+                        self.bootstrap_connected_count = mesh_peer_count;
                         return Task::done(Message::UpdateLoadingStatus(LoadingStatus::Ready));
                     }
                     NetworkEvent::NetworkDegraded { connected_count } => {
                         tracing::warn!("Rete degradata (peer connessi: {})", connected_count);
                         self.loading_logs.push(format!("⚠ Rete degradata (peer connessi: {})", connected_count));
+                        self.network_state = NetworkState::Degraded;
                     }
                     NetworkEvent::DiscoveringPeers { connected_count } => {
                         tracing::info!("Ricerca peer in corso (connessi: {})", connected_count);
@@ -1545,6 +1583,14 @@ impl GuiApp {
                             avg_latency_ms,
                             dht_size
                         );
+                        // Traccia la salute della rete
+                        self.network_health_report = Some(NetworkHealthReport {
+                            peer_count,
+                            error_rate,
+                            avg_latency_ms,
+                            dht_size,
+                            timestamp: chrono::Utc::now().format("%H:%M:%S").to_string(),
+                        });
                     }
                     _ => {
                         // Altri eventi di rete
@@ -2673,35 +2719,315 @@ Scorrendo verso il basso e facendo clic su \"Accetto\", riconosci che:\n\
     }
     
     fn view_home_tab(&self) -> Element<'_, Message> {
-        let title = Text::new("🏠 Home - Novità e Informazioni")
+        let title = Text::new("🏠 Otter Network Status")
             .size(32)
             .font(ROBOTO_FONT)
-            .shaping(text::Shaping::Advanced);
+            .shaping(text::Shaping::Advanced)
+            .color(Color::from_rgb(0.2, 0.45, 0.9));
         
-        let content = Text::new(
-            "Benvenuto su Otter! 🦦\n\n\
-            Qui troverai:\n\
-            • Novità e aggiornamenti\n\
-            • Informazioni sulla piattaforma\n\
-            • Statistiche e dettagli\n\n\
-            Funzionalità in sviluppo..."
+        // === NETWORK STATUS SECTION ===
+        let (status_icon, status_text, status_color) = match self.network_state {
+            NetworkState::Ready => ("🟢 ONLINE", "Rete connessa e pronta", Color::from_rgb(0.0, 0.8, 0.2)),
+            NetworkState::Connecting => ("🟡 CONNESSIONE...", "Connessione alla rete in corso", Color::from_rgb(1.0, 0.8, 0.0)),
+            NetworkState::Degraded => ("🟠 DEGRADED", "Rete degradata (pochi peer)", Color::from_rgb(1.0, 0.6, 0.0)),
+            NetworkState::Error => ("🔴 ERRORE", "Errore di connessione", Color::from_rgb(1.0, 0.0, 0.0)),
+        };
+        
+        let status_box = Container::new(
+            Column::new()
+                .push(
+                    Text::new(status_icon)
+                        .size(28)
+                        .font(ROBOTO_FONT)
+                        .color(status_color)
+                )
+                .push(
+                    Text::new(status_text)
+                        .size(18)
+                        .font(ROBOTO_FONT)
+                        .color(Color::from_rgb(0.9, 0.9, 0.9))
+                )
+                .spacing(10)
+                .align_x(Alignment::Center)
         )
-        .size(16)
-        .font(ROBOTO_FONT);
+        .width(Length::Fill)
+        .padding(30)
+        .style(move |_theme| {
+            container::Style {
+                background: Some(Background::Color(Color::from_rgb(0.12, 0.12, 0.14))),
+                border: Border::default().rounded(10).width(2).color(status_color),
+                ..Default::default()
+            }
+        });
         
+        // === BOOTSTRAP & DHT SECTION ===
+        let bootstrap_status = if let Some(health) = &self.network_health_report {
+            format!("📡 Bootstrap: Connected | DHT Peers: {}", health.dht_size)
+        } else {
+            "📡 Bootstrap: Connecting...".to_string()
+        };
+        
+        let bootstrap_box = Container::new(
+            Text::new(bootstrap_status)
+                .size(14)
+                .font(ROBOTO_FONT)
+                .color(Color::from_rgb(0.7, 0.9, 1.0))
+        )
+        .width(Length::Fill)
+        .padding(15)
+        .style(|_theme| {
+            container::Style {
+                background: Some(Background::Color(Color::from_rgb(0.15, 0.15, 0.17))),
+                border: Border::default().rounded(8).width(1).color(Color::from_rgb(0.2, 0.5, 0.8)),
+                ..Default::default()
+            }
+        });
+        
+        // === LISTENING ADDRESSES SECTION ===
+        let mut listening_col = Column::new()
+            .push(
+                Text::new("🔊 Listening Addresses")
+                    .size(16)
+                    .font(ROBOTO_FONT)
+                    .color(Color::from_rgb(0.8, 0.8, 0.8))
+            )
+            .spacing(8);
+        
+        if self.listening_addresses.is_empty() {
+            listening_col = listening_col.push(
+                Text::new("Waiting for network initialization...")
+                    .size(12)
+                    .font(ROBOTO_FONT)
+                    .color(Color::from_rgb(0.5, 0.5, 0.5))
+            );
+        } else {
+            for addr in &self.listening_addresses {
+                listening_col = listening_col.push(
+                    Text::new(format!("  • {}", addr))
+                        .size(12)
+                        .font(ROBOTO_FONT)
+                        .color(Color::from_rgb(0.6, 0.8, 0.9))
+                );
+            }
+        }
+        
+        let listening_box = Container::new(listening_col)
+            .width(Length::Fill)
+            .padding(15)
+            .style(|_theme| {
+                container::Style {
+                    background: Some(Background::Color(Color::from_rgb(0.15, 0.15, 0.17))),
+                    border: Border::default().rounded(8).width(1).color(Color::from_rgb(0.2, 0.5, 0.8)),
+                    ..Default::default()
+                }
+            });
+        
+        // === HEALTH METRICS SECTION ===
+        let mut health_col = Column::new()
+            .push(
+                Text::new("📊 Network Health Metrics")
+                    .size(16)
+                    .font(ROBOTO_FONT)
+                    .color(Color::from_rgb(0.8, 0.8, 0.8))
+            )
+            .spacing(10);
+        
+        if let Some(health) = &self.network_health_report {
+            let latency_text = health.avg_latency_ms
+                .map(|ms| format!("{} ms", ms))
+                .unwrap_or_else(|| "N/A".to_string());
+            
+            health_col = health_col
+                .push(self.create_metric_row(
+                    "👥 Connected Peers".to_string(),
+                    format!("{}", health.peer_count),
+                    Color::from_rgb(0.0, 0.8, 0.2)
+                ))
+                .push(self.create_metric_row(
+                    "⏱️ Avg Latency".to_string(),
+                    latency_text,
+                    Color::from_rgb(0.4, 0.7, 1.0)
+                ))
+                .push(self.create_metric_row(
+                    "❌ Error Rate".to_string(),
+                    format!("{:.2}%", health.error_rate * 100.0),
+                    if health.error_rate < 0.05 { Color::from_rgb(0.0, 0.8, 0.2) } else { Color::from_rgb(1.0, 0.6, 0.0) }
+                ))
+                .push(self.create_metric_row(
+                    "🗂️ DHT Size".to_string(),
+                    format!("{} peers", health.dht_size),
+                    Color::from_rgb(0.6, 0.8, 1.0)
+                ))
+                .push(
+                    Text::new(format!("🕐 Updated: {}", health.timestamp))
+                        .size(11)
+                        .font(ROBOTO_FONT)
+                        .color(Color::from_rgb(0.5, 0.5, 0.5))
+                );
+        } else {
+            health_col = health_col.push(
+                Text::new("Waiting for health report...")
+                    .size(12)
+                    .font(ROBOTO_FONT)
+                    .color(Color::from_rgb(0.5, 0.5, 0.5))
+            );
+        }
+        
+        let health_box = Container::new(health_col)
+            .width(Length::Fill)
+            .padding(15)
+            .style(|_theme| {
+                container::Style {
+                    background: Some(Background::Color(Color::from_rgb(0.15, 0.15, 0.17))),
+                    border: Border::default().rounded(8).width(1).color(Color::from_rgb(0.2, 0.5, 0.8)),
+                    ..Default::default()
+                }
+            });
+        
+        // === CONNECTED PEERS SECTION ===
+        let mut peers_col = Column::new()
+            .push(
+                Text::new(format!("👥 Discovered Peers ({})", self.discovered_peers.len()))
+                    .size(16)
+                    .font(ROBOTO_FONT)
+                    .color(Color::from_rgb(0.8, 0.8, 0.8))
+            )
+            .spacing(8);
+        
+        if self.discovered_peers.is_empty() {
+            peers_col = peers_col.push(
+                Text::new("No peers discovered yet")
+                    .size(12)
+                    .font(ROBOTO_FONT)
+                    .color(Color::from_rgb(0.5, 0.5, 0.5))
+            );
+        } else {
+            for peer in self.discovered_peers.iter().take(10) {
+                let (online_icon, online_color) = if peer.is_online {
+                    ("🟢", Color::from_rgb(0.0, 0.8, 0.2))
+                } else {
+                    ("🔴", Color::from_rgb(0.7, 0.7, 0.7))
+                };
+                
+                let peer_display = format!(
+                    "{} {} ({}...)",
+                    online_icon,
+                    peer.nickname,
+                    &peer.peer_id[..8.min(peer.peer_id.len())]
+                );
+                
+                peers_col = peers_col.push(
+                    Text::new(peer_display)
+                        .size(12)
+                        .font(ROBOTO_FONT)
+                        .color(online_color)
+                );
+            }
+            
+            if self.discovered_peers.len() > 10 {
+                peers_col = peers_col.push(
+                    Text::new(format!("... and {} more", self.discovered_peers.len() - 10))
+                        .size(11)
+                        .font(ROBOTO_FONT)
+                        .color(Color::from_rgb(0.5, 0.5, 0.5))
+                );
+            }
+        }
+        
+        let peers_box = Container::new(peers_col)
+            .width(Length::Fill)
+            .padding(15)
+            .style(|_theme| {
+                container::Style {
+                    background: Some(Background::Color(Color::from_rgb(0.15, 0.15, 0.17))),
+                    border: Border::default().rounded(8).width(1).color(Color::from_rgb(0.2, 0.5, 0.8)),
+                    ..Default::default()
+                }
+            });
+        
+        // === NETWORK LOG SECTION ===
+        let mut log_col = Column::new()
+            .push(
+                Text::new("📝 Network Log")
+                    .size(16)
+                    .font(ROBOTO_FONT)
+                    .color(Color::from_rgb(0.8, 0.8, 0.8))
+            )
+            .spacing(5);
+        
+        // Mostra only last 8 log items (scrolling available) 
+        for log in self.loading_logs.iter().rev().take(8) {
+            log_col = log_col.push(
+                Text::new(log)
+                    .size(11)
+                    .font(ROBOTO_FONT)
+                    .color(Color::from_rgb(0.6, 0.8, 0.9))
+            );
+        }
+        
+        let log_box = Container::new(
+            Scrollable::new(log_col)
+                .width(Length::Fill)
+                .height(Length::Fixed(150.0))
+        )
+        .width(Length::Fill)
+        .padding(15)
+        .style(|_theme| {
+            container::Style {
+                background: Some(Background::Color(Color::from_rgb(0.1, 0.1, 0.12))),
+                border: Border::default().rounded(8).width(1).color(Color::from_rgb(0.2, 0.5, 0.8)),
+                ..Default::default()
+            }
+        });
+        
+        // === MAIN LAYOUT ===
         let layout = Column::new()
-            .push(Space::new().height(Length::Fixed(30.0)))
+            .push(Space::new().height(Length::Fixed(20.0)))
             .push(title)
             .push(Space::new().height(Length::Fixed(20.0)))
-            .push(content)
+            .push(status_box)
+            .push(Space::new().height(Length::Fixed(15.0)))
+            .push(bootstrap_box)
+            .push(Space::new().height(Length::Fixed(15.0)))
+            .push(listening_box)
+            .push(Space::new().height(Length::Fixed(15.0)))
+            .push(health_box)
+            .push(Space::new().height(Length::Fixed(15.0)))
+            .push(peers_box)
+            .push(Space::new().height(Length::Fixed(15.0)))
+            .push(log_box)
             .push(Space::new().height(Length::Fill))
             .padding(40)
             .width(Length::Fill)
-            .height(Length::Fill);
+            .spacing(5);
         
-        Container::new(layout)
-            .width(Length::Fill)
-            .height(Length::Fill)
+        Container::new(
+            Scrollable::new(layout)
+                .width(Length::Fill)
+                .height(Length::Fill)
+        )
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
+    }
+    
+    fn create_metric_row(&self, label: String, value: String, value_color: Color) -> Element<'_, Message> {
+        Row::new()
+            .push(
+                Text::new(label)
+                    .size(12)
+                    .font(ROBOTO_FONT)
+                    .color(Color::from_rgb(0.7, 0.7, 0.7))
+                    .width(Length::Fixed(150.0))
+            )
+            .push(
+                Text::new(value)
+                    .size(13)
+                    .font(ROBOTO_FONT)
+                    .color(value_color)
+            )
+            .spacing(20)
+            .align_y(Alignment::Center)
             .into()
     }
     
