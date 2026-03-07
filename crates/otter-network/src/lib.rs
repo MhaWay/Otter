@@ -14,21 +14,14 @@ pub mod webrtc;
 use futures::{prelude::*, select};
 use libp2p::{
     core::transport::upgrade,
-    core::muxing::StreamMuxerBox,
-    gossipsub, identify, kad,
-    mdns,
-    noise,
+    gossipsub, identify, kad, mdns, noise,
     swarm::{NetworkBehaviour, SwarmEvent},
-    tcp, yamux, PeerId, Swarm, Multiaddr, Transport,
+    tcp, yamux, Multiaddr, PeerId, Swarm, Transport,
 };
-use std::{
-    collections::HashSet,
-    time::Duration,
-};
+use std::{collections::HashSet, time::Duration};
 use thiserror::Error as ThisError;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
-use void::Void;
 
 #[derive(ThisError, Debug)]
 pub enum NetworkError {
@@ -48,7 +41,10 @@ pub enum NetworkError {
 #[derive(Debug, Clone)]
 pub enum NetworkEvent {
     /// A new peer was discovered
-    PeerDiscovered { peer_id: PeerId, addresses: Vec<String> },
+    PeerDiscovered {
+        peer_id: PeerId,
+        addresses: Vec<String>,
+    },
     /// A peer connected
     PeerConnected { peer_id: PeerId },
     /// A peer disconnected
@@ -87,10 +83,14 @@ pub struct Network {
     event_tx: mpsc::Sender<NetworkEvent>,
     command_rx: mpsc::Receiver<NetworkCommand>,
     connected_peers: HashSet<PeerId>,
-    gossipsub_topic: gossipsub::IdentTopic,
+    announce_topic: gossipsub::IdentTopic,
 }
 
 impl Network {
+    fn peer_inbox_topic(peer_id: &PeerId) -> gossipsub::IdentTopic {
+        gossipsub::IdentTopic::new(format!("otter-peer/{peer_id}"))
+    }
+
     /// Create a new network instance
     pub fn new(
         event_tx: mpsc::Sender<NetworkEvent>,
@@ -99,47 +99,47 @@ impl Network {
         // Generate a new keypair for this peer
         let local_key = libp2p::identity::Keypair::generate_ed25519();
         let local_peer_id = PeerId::from(local_key.public());
-        
+
         info!("Local peer ID: {}", local_peer_id);
-        
+
         // Create a transport
         let transport = tcp::tokio::Transport::default()
             .upgrade(upgrade::Version::V1Lazy)
-            .authenticate(noise::Config::new(&local_key).unwrap())
+            .authenticate(
+                noise::Config::new(&local_key)
+                    .map_err(|e| NetworkError::InitializationError(e.to_string()))?,
+            )
             .multiplex(yamux::Config::default())
             .timeout(Duration::from_secs(20))
             .boxed();
-        
+
         // Configure Gossipsub
         let gossipsub_config = gossipsub::ConfigBuilder::default()
             .heartbeat_interval(Duration::from_secs(10))
             .validation_mode(gossipsub::ValidationMode::Strict)
             .build()
             .map_err(|e| NetworkError::InitializationError(e.to_string()))?;
-        
+
         let gossipsub = gossipsub::Behaviour::new(
             gossipsub::MessageAuthenticity::Signed(local_key.clone()),
             gossipsub_config,
         )
         .map_err(|e| NetworkError::InitializationError(e.to_string()))?;
-        
+
         // Create mDNS for local peer discovery
-        let mdns = mdns::tokio::Behaviour::new(
-            mdns::Config::default(),
-            local_peer_id,
-        )
-        .map_err(|e| NetworkError::InitializationError(e.to_string()))?;
-        
+        let mdns = mdns::tokio::Behaviour::new(mdns::Config::default(), local_peer_id)
+            .map_err(|e| NetworkError::InitializationError(e.to_string()))?;
+
         // Create Kademlia DHT
         let store = kad::store::MemoryStore::new(local_peer_id);
         let kad = kad::Behaviour::new(local_peer_id, store);
-        
+
         // Create identify protocol
         let identify = identify::Behaviour::new(identify::Config::new(
             "/otter/1.0.0".to_string(),
             local_key.public(),
         ));
-        
+
         // Combine behaviors
         let behaviour = OtterBehaviour {
             gossipsub,
@@ -147,47 +147,59 @@ impl Network {
             kad,
             identify,
         };
-        
+
         // Create swarm with custom config to prevent idle disconnections
         // Default idle_connection_timeout is 120 seconds (2 minutes) which causes unwanted disconnections
         // Set to 10 minutes - balances resource usage with connection stability
         let swarm_config = libp2p::swarm::Config::with_tokio_executor()
             .with_idle_connection_timeout(Duration::from_secs(600)); // 10 minutes
-        
+
         let swarm = Swarm::new(transport, behaviour, local_peer_id, swarm_config);
-        
-        // Create gossipsub topic
-        let gossipsub_topic = gossipsub::IdentTopic::new("otter-chat");
-        
+
+        // Shared announce topic for discovery/readiness, plus peer-specific inbox topics for 1:1 traffic.
+        let announce_topic = gossipsub::IdentTopic::new("otter-announce");
+
         Ok(Self {
             swarm,
             event_tx,
             command_rx,
             connected_peers: HashSet::new(),
-            gossipsub_topic,
+            announce_topic,
         })
     }
-    
+
     /// Start listening on the given address
     pub fn listen(&mut self, addr: &str) -> Result<(), NetworkError> {
         let addr: Multiaddr = addr
             .parse()
             .map_err(|e| NetworkError::ListenError(format!("Invalid address: {}", e)))?;
-        
+
         self.swarm
             .listen_on(addr)
             .map_err(|e| NetworkError::ListenError(e.to_string()))?;
-        
-        // Subscribe to gossipsub topic
+
+        // Subscribe to shared announce topic.
         self.swarm
             .behaviour_mut()
             .gossipsub
-            .subscribe(&self.gossipsub_topic)
-            .map_err(|e| NetworkError::InitializationError(format!("Subscribe error: {}", e)))?;
-        
+            .subscribe(&self.announce_topic)
+            .map_err(|e| {
+                NetworkError::InitializationError(format!("Announce subscribe error: {}", e))
+            })?;
+
+        // Subscribe to our private inbox topic used for direct 1:1 messages.
+        let inbox_topic = Self::peer_inbox_topic(self.swarm.local_peer_id());
+        self.swarm
+            .behaviour_mut()
+            .gossipsub
+            .subscribe(&inbox_topic)
+            .map_err(|e| {
+                NetworkError::InitializationError(format!("Inbox subscribe error: {}", e))
+            })?;
+
         Ok(())
     }
-    
+
     /// Run the network event loop
     pub async fn run(mut self) -> Result<(), NetworkError> {
         loop {
@@ -212,10 +224,10 @@ impl Network {
                 }
             }
         }
-        
+
         Ok(())
     }
-    
+
     async fn handle_swarm_event<THandlerErr>(
         &mut self,
         event: SwarmEvent<OtterBehaviourEvent, THandlerErr>,
@@ -227,98 +239,116 @@ impl Network {
             SwarmEvent::Behaviour(OtterBehaviourEvent::Mdns(mdns::Event::Discovered(list))) => {
                 for (peer_id, multiaddr) in list {
                     debug!("Discovered peer: {} at {}", peer_id, multiaddr);
-                    
+
                     // Add to Kademlia DHT
                     self.swarm
                         .behaviour_mut()
                         .kad
                         .add_address(&peer_id, multiaddr.clone());
-                    
-                    let _ = self.event_tx.send(NetworkEvent::PeerDiscovered {
-                        peer_id,
-                        addresses: vec![multiaddr.to_string()],
-                    }).await;
+
+                    let _ = self
+                        .event_tx
+                        .send(NetworkEvent::PeerDiscovered {
+                            peer_id,
+                            addresses: vec![multiaddr.to_string()],
+                        })
+                        .await;
                 }
             }
-            
-            SwarmEvent::Behaviour(OtterBehaviourEvent::Gossipsub(
-                gossipsub::Event::Message {
-                    propagation_source,
-                    message,
-                    ..
-                },
-            )) => {
+
+            SwarmEvent::Behaviour(OtterBehaviourEvent::Gossipsub(gossipsub::Event::Message {
+                propagation_source,
+                message,
+                ..
+            })) => {
                 debug!("Received message from {}", propagation_source);
-                
-                let _ = self.event_tx.send(NetworkEvent::MessageReceived {
-                    from: propagation_source,
-                    data: message.data,
-                }).await;
+
+                let _ = self
+                    .event_tx
+                    .send(NetworkEvent::MessageReceived {
+                        from: propagation_source,
+                        data: message.data,
+                    })
+                    .await;
             }
-            
+
             SwarmEvent::Behaviour(OtterBehaviourEvent::Gossipsub(
-                gossipsub::Event::Subscribed { peer_id, .. }
+                gossipsub::Event::Subscribed { peer_id, .. },
             )) => {
                 info!("Peer {} subscribed to gossipsub topic", peer_id);
-                
+
                 // Notify that peer is ready for messages via gossipsub
-                let _ = self.event_tx.send(NetworkEvent::PeerReadyForMessages { peer_id }).await;
+                let _ = self
+                    .event_tx
+                    .send(NetworkEvent::PeerReadyForMessages { peer_id })
+                    .await;
             }
-            
+
             SwarmEvent::Behaviour(OtterBehaviourEvent::Gossipsub(
-                gossipsub::Event::Unsubscribed { peer_id, .. }
+                gossipsub::Event::Unsubscribed { peer_id, .. },
             )) => {
                 info!("Peer {} unsubscribed from gossipsub topic", peer_id);
             }
-            
+
             SwarmEvent::Behaviour(OtterBehaviourEvent::Gossipsub(event)) => {
                 // Log any other gossipsub events (validation failures, etc.) at debug level
                 debug!("Unhandled gossipsub event: {:?}", event);
             }
-            
+
             SwarmEvent::ConnectionEstablished { peer_id, .. } => {
                 info!("Connected to peer: {}", peer_id);
                 self.connected_peers.insert(peer_id);
-                
-                let _ = self.event_tx.send(NetworkEvent::PeerConnected { peer_id }).await;
+
+                let _ = self
+                    .event_tx
+                    .send(NetworkEvent::PeerConnected { peer_id })
+                    .await;
             }
-            
+
             SwarmEvent::ConnectionClosed { peer_id, .. } => {
                 info!("Disconnected from peer: {}", peer_id);
                 self.connected_peers.remove(&peer_id);
-                
-                let _ = self.event_tx.send(NetworkEvent::PeerDisconnected { peer_id }).await;
+
+                let _ = self
+                    .event_tx
+                    .send(NetworkEvent::PeerDisconnected { peer_id })
+                    .await;
             }
-            
+
             SwarmEvent::NewListenAddr { address, .. } => {
                 info!("Listening on: {}", address);
-                
-                let _ = self.event_tx.send(NetworkEvent::ListeningOn {
-                    address: address.to_string(),
-                }).await;
+
+                let _ = self
+                    .event_tx
+                    .send(NetworkEvent::ListeningOn {
+                        address: address.to_string(),
+                    })
+                    .await;
             }
-            
+
             _ => {}
         }
-        
+
         Ok(())
     }
-    
+
     async fn handle_command(&mut self, command: NetworkCommand) -> Result<(), NetworkError> {
         match command {
             NetworkCommand::SendMessage { to, data } => {
-                // NOTE: 'to' parameter is currently ignored - gossipsub broadcasts to all subscribers.
-                // E2E encryption ensures only the intended recipient can decrypt the message.
-                debug!("Broadcasting message (intended for: {}, size: {} bytes)", to, data.len());
-                
-                // Publish to gossipsub topic
-                match self.swarm
-                    .behaviour_mut()
-                    .gossipsub
-                    .publish(self.gossipsub_topic.clone(), data)
-                {
+                debug!(
+                    "Publishing direct inbox message for peer {} ({} bytes)",
+                    to,
+                    data.len()
+                );
+                let topic = Self::peer_inbox_topic(&to);
+
+                // Publish only to the recipient inbox topic instead of the old global broadcast topic.
+                match self.swarm.behaviour_mut().gossipsub.publish(topic, data) {
                     Ok(message_id) => {
-                        debug!("Published message to gossipsub, message_id: {:?}", message_id);
+                        debug!(
+                            "Published message to gossipsub, message_id: {:?}",
+                            message_id
+                        );
                     }
                     Err(e) => {
                         error!("Failed to publish to gossipsub: {}", e);
@@ -326,23 +356,26 @@ impl Network {
                     }
                 }
             }
-            
+
             NetworkCommand::ListPeers { response } => {
                 let peers: Vec<PeerId> = self.connected_peers.iter().copied().collect();
                 let _ = response.send(peers).await;
             }
-            
-            NetworkCommand::DialPeer { peer_id: _, address } => {
+
+            NetworkCommand::DialPeer {
+                peer_id: _,
+                address,
+            } => {
                 let addr: Multiaddr = address
                     .parse()
                     .map_err(|e| NetworkError::TransportError(format!("Invalid address: {}", e)))?;
-                
+
                 self.swarm
                     .dial(addr)
                     .map_err(|e| NetworkError::TransportError(e.to_string()))?;
             }
         }
-        
+
         Ok(())
     }
 }
@@ -362,7 +395,7 @@ pub fn create_network_channels() -> (
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[tokio::test]
     async fn test_network_creation() {
         let (event_tx, _event_rx, _command_tx, command_rx) = create_network_channels();

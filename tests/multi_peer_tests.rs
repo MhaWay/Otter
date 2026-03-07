@@ -13,6 +13,7 @@ use std::time::Duration;
 use tempfile::TempDir;
 use tokio::sync::{mpsc, Mutex, RwLock};
 use tokio::time;
+use x25519_dalek::PublicKey as X25519PublicKey;
 
 /// Test peer that can be run in a separate task
 struct TestPeer {
@@ -421,8 +422,8 @@ async fn test_pfs_session_forward_secrecy() {
     let mut alice_session1 = PFSSession::new(
         &alice,
         &bob_public,
-        alice_ephemeral1.clone(),
-        &bob_ephemeral1.public_key(),
+        &alice_ephemeral1,
+        &X25519PublicKey::from(&bob_ephemeral1),
         true,
     )
     .unwrap();
@@ -430,8 +431,8 @@ async fn test_pfs_session_forward_secrecy() {
     let mut bob_session1 = PFSSession::new(
         &bob,
         &alice_public,
-        bob_ephemeral1,
-        &alice_ephemeral1.public_key(),
+        &bob_ephemeral1,
+        &X25519PublicKey::from(&alice_ephemeral1),
         false,
     )
     .unwrap();
@@ -448,8 +449,8 @@ async fn test_pfs_session_forward_secrecy() {
     let mut alice_session2 = PFSSession::new(
         &alice,
         &bob_public,
-        alice_ephemeral2.clone(),
-        &bob_ephemeral2.public_key(),
+        &alice_ephemeral2,
+        &X25519PublicKey::from(&bob_ephemeral2),
         true,
     )
     .unwrap();
@@ -457,8 +458,8 @@ async fn test_pfs_session_forward_secrecy() {
     let mut bob_session2 = PFSSession::new(
         &bob,
         &alice_public,
-        bob_ephemeral2,
-        &alice_ephemeral2.public_key(),
+        &bob_ephemeral2,
+        &X25519PublicKey::from(&alice_ephemeral2),
         false,
     )
     .unwrap();

@@ -15,6 +15,7 @@ otter-crypto = { path = "../otter-crypto" }
 otter-network = { path = "../otter-network" }
 otter-messaging = { path = "../otter-messaging" }
 otter-protocol = { path = "../otter-protocol" }
+otter-storage = { path = "../otter-storage" }
 otter-voice = { path = "../otter-voice" }
 tokio = { workspace = true }
 clap = { workspace = true }

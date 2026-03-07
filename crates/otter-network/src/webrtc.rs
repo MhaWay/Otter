@@ -44,23 +44,23 @@ pub enum CandidateType {
 pub struct IceCandidate {
     /// Candidate type
     pub candidate_type: CandidateType,
-    
+
     /// Transport protocol (UDP or TCP)
     pub protocol: TransportProtocol,
-    
+
     /// IP address and port
     pub address: String,
     pub port: u16,
-    
+
     /// Priority for this candidate
     pub priority: u32,
-    
+
     /// Foundation (identifier for related candidates)
     pub foundation: String,
-    
+
     /// Component ID (1 for RTP, 2 for RTCP)
     pub component: u16,
-    
+
     /// Related address (for reflexive/relay candidates)
     pub related_address: Option<String>,
     pub related_port: Option<u16>,
@@ -81,7 +81,7 @@ impl IceCandidate {
             related_port: None,
         }
     }
-    
+
     /// Create a server reflexive candidate (from STUN)
     pub fn server_reflexive(
         address: String,
@@ -102,7 +102,7 @@ impl IceCandidate {
             related_port: Some(local_port),
         }
     }
-    
+
     /// Create a relay candidate (from TURN)
     pub fn relay(
         address: String,
@@ -123,7 +123,7 @@ impl IceCandidate {
             related_port: Some(relay_port),
         }
     }
-    
+
     /// Calculate ICE priority (RFC 5245)
     fn calculate_priority(candidate_type: CandidateType, component: u16) -> u32 {
         let type_preference = match candidate_type {
@@ -132,11 +132,11 @@ impl IceCandidate {
             CandidateType::ServerReflexive => 100,
             CandidateType::Relay => 0,
         };
-        
+
         // Priority = (2^24)*(type preference) + (2^8)*(local preference) + (2^0)*(256 - component)
         (type_preference << 24) | (65535 << 8) | ((256 - component as u32) & 0xFF)
     }
-    
+
     /// Serialize to SDP format
     pub fn to_sdp(&self) -> String {
         let mut sdp = format!(
@@ -151,7 +151,7 @@ impl IceCandidate {
             self.address,
             self.port
         );
-        
+
         sdp.push_str(&format!(
             " typ {}",
             match self.candidate_type {
@@ -161,11 +161,11 @@ impl IceCandidate {
                 CandidateType::Relay => "relay",
             }
         ));
-        
+
         if let (Some(addr), Some(port)) = (&self.related_address, self.related_port) {
             sdp.push_str(&format!(" raddr {} rport {}", addr, port));
         }
-        
+
         sdp
     }
 }
@@ -182,16 +182,16 @@ pub enum TransportProtocol {
 pub struct IceConfig {
     /// STUN servers for discovering public IP
     pub stun_servers: Vec<String>,
-    
+
     /// TURN servers for relay (with credentials)
     pub turn_servers: Vec<TurnServer>,
-    
+
     /// Gather candidates locally
     pub gather_host_candidates: bool,
-    
+
     /// Use IPv6 candidates
     pub enable_ipv6: bool,
-    
+
     /// ICE timeout in seconds
     pub timeout_seconds: u32,
 }
@@ -256,11 +256,11 @@ impl IceNegotiator {
             state: IceState::Gathering,
         }
     }
-    
+
     /// Gather local candidates
     pub fn gather_candidates(&mut self) -> Result<Vec<IceCandidate>, WebRTCError> {
         let mut candidates = Vec::new();
-        
+
         // Gather host candidates (local interfaces)
         if self.config.gather_host_candidates {
             // In a real implementation, this would enumerate network interfaces
@@ -271,31 +271,31 @@ impl IceNegotiator {
                 TransportProtocol::Udp,
             ));
         }
-        
+
         // TODO: Query STUN servers for server reflexive candidates
         // TODO: Request TURN allocation for relay candidates
-        
+
         self.local_candidates = candidates.clone();
         self.state = IceState::GatheringComplete;
-        
+
         Ok(candidates)
     }
-    
+
     /// Add remote candidate
     pub fn add_remote_candidate(&mut self, candidate: IceCandidate) {
         self.remote_candidates.push(candidate);
     }
-    
+
     /// Get current ICE state
     pub fn state(&self) -> &IceState {
         &self.state
     }
-    
+
     /// Get local candidates
     pub fn local_candidates(&self) -> &[IceCandidate] {
         &self.local_candidates
     }
-    
+
     /// Get remote candidates
     pub fn remote_candidates(&self) -> &[IceCandidate] {
         &self.remote_candidates
@@ -325,20 +325,17 @@ impl Default for WebRTCTransportConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_ice_candidate_creation() {
-        let candidate = IceCandidate::host(
-            "192.168.1.100".to_string(),
-            8080,
-            TransportProtocol::Udp,
-        );
-        
+        let candidate =
+            IceCandidate::host("192.168.1.100".to_string(), 8080, TransportProtocol::Udp);
+
         assert_eq!(candidate.candidate_type, CandidateType::Host);
         assert_eq!(candidate.address, "192.168.1.100");
         assert_eq!(candidate.port, 8080);
     }
-    
+
     #[test]
     fn test_ice_priority_calculation() {
         let host = IceCandidate::host("127.0.0.1".to_string(), 8080, TransportProtocol::Udp);
@@ -349,31 +346,28 @@ mod tests {
             "127.0.0.1".to_string(),
             8080,
         );
-        
+
         // Host candidates should have higher priority than relay
         assert!(host.priority > relay.priority);
     }
-    
+
     #[test]
     fn test_ice_negotiator() {
         let config = IceConfig::default();
         let mut negotiator = IceNegotiator::new(config);
-        
+
         assert_eq!(negotiator.state(), &IceState::Gathering);
-        
+
         let candidates = negotiator.gather_candidates().unwrap();
         assert!(!candidates.is_empty());
         assert_eq!(negotiator.state(), &IceState::GatheringComplete);
     }
-    
+
     #[test]
     fn test_candidate_sdp_format() {
-        let candidate = IceCandidate::host(
-            "192.168.1.100".to_string(),
-            8080,
-            TransportProtocol::Udp,
-        );
-        
+        let candidate =
+            IceCandidate::host("192.168.1.100".to_string(), 8080, TransportProtocol::Udp);
+
         let sdp = candidate.to_sdp();
         assert!(sdp.contains("192.168.1.100"));
         assert!(sdp.contains("8080"));

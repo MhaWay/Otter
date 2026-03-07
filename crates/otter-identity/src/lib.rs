@@ -13,14 +13,14 @@
 
 pub mod trust;
 
+use chrono::{DateTime, Utc};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::fmt;
 use thiserror::Error;
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret as X25519StaticSecret};
-use chrono::{DateTime, Utc};
-use std::collections::HashSet;
 
 #[derive(Error, Debug)]
 pub enum IdentityError {
@@ -53,11 +53,11 @@ pub struct Identity {
     /// Ed25519 signing key pair
     signing_key: SigningKey,
     verifying_key: VerifyingKey,
-    
+
     /// X25519 encryption key pair for key exchange
     encryption_secret: X25519StaticSecret,
     encryption_public: X25519PublicKey,
-    
+
     /// Unique peer identifier derived from public key
     peer_id: PeerId,
 }
@@ -66,18 +66,18 @@ impl Identity {
     /// Generate a new random identity
     pub fn generate() -> Result<Self, IdentityError> {
         let mut rng = OsRng;
-        
+
         // Generate Ed25519 signing keypair
         let signing_key = SigningKey::generate(&mut rng);
         let verifying_key = signing_key.verifying_key();
-        
+
         // Generate X25519 encryption keypair
         let encryption_secret = X25519StaticSecret::random_from_rng(&mut rng);
         let encryption_public = X25519PublicKey::from(&encryption_secret);
-        
+
         // Derive peer ID from Ed25519 public key
         let peer_id = PeerId::from_public_key(&verifying_key);
-        
+
         Ok(Self {
             signing_key,
             verifying_key,
@@ -86,70 +86,70 @@ impl Identity {
             peer_id,
         })
     }
-    
+
     /// Get the peer ID for this identity
     pub fn peer_id(&self) -> &PeerId {
         &self.peer_id
     }
-    
+
     /// Get the Ed25519 verifying (public) key
     pub fn verifying_key(&self) -> &VerifyingKey {
         &self.verifying_key
     }
-    
+
     /// Get the X25519 public encryption key
     pub fn encryption_public_key(&self) -> &X25519PublicKey {
         &self.encryption_public
     }
-    
+
     /// Get the X25519 secret key (for key exchange)
     pub fn encryption_secret_key(&self) -> &X25519StaticSecret {
         &self.encryption_secret
     }
-    
+
     /// Sign a message with this identity
     pub fn sign(&self, message: &[u8]) -> Signature {
         self.signing_key.sign(message)
     }
-    
+
     /// Export identity to JSON format
     pub fn to_json(&self) -> Result<String, IdentityError> {
         let export = IdentityExport {
             signing_key: hex::encode(self.signing_key.to_bytes()),
             encryption_secret: hex::encode(self.encryption_secret.to_bytes()),
         };
-        
+
         serde_json::to_string_pretty(&export)
             .map_err(|e| IdentityError::SerializationError(e.to_string()))
     }
-    
+
     /// Import identity from JSON format
     pub fn from_json(json: &str) -> Result<Self, IdentityError> {
         let export: IdentityExport = serde_json::from_str(json)
             .map_err(|e| IdentityError::SerializationError(e.to_string()))?;
-        
+
         let signing_bytes = hex::decode(&export.signing_key)
             .map_err(|e| IdentityError::SerializationError(e.to_string()))?;
-        
+
         let signing_key = SigningKey::from_bytes(
             &signing_bytes
                 .try_into()
                 .map_err(|_| IdentityError::InvalidPublicKey)?,
         );
-        
+
         let verifying_key = signing_key.verifying_key();
-        
+
         let encryption_bytes = hex::decode(&export.encryption_secret)
             .map_err(|e| IdentityError::SerializationError(e.to_string()))?;
-        
+
         let encryption_secret = X25519StaticSecret::from(
             TryInto::<[u8; 32]>::try_into(encryption_bytes)
                 .map_err(|_| IdentityError::InvalidPublicKey)?,
         );
-        
+
         let encryption_public = X25519PublicKey::from(&encryption_secret);
         let peer_id = PeerId::from_public_key(&verifying_key);
-        
+
         Ok(Self {
             signing_key,
             verifying_key,
@@ -180,12 +180,12 @@ impl PeerId {
         let encoded = bs58::encode(hash.as_bytes()).into_string();
         Self(encoded)
     }
-    
+
     /// Create a PeerId from a base58 string
     pub fn from_string(s: String) -> Self {
         Self(s)
     }
-    
+
     /// Get the string representation
     pub fn as_str(&self) -> &str {
         &self.0
@@ -221,12 +221,12 @@ impl PublicIdentity {
             encryption_public: identity.encryption_public.to_bytes().to_vec(),
         }
     }
-    
+
     /// Get the peer ID
     pub fn peer_id(&self) -> &PeerId {
         &self.peer_id
     }
-    
+
     /// Get the Ed25519 verifying key
     pub fn verifying_key(&self) -> Result<VerifyingKey, IdentityError> {
         let bytes: [u8; 32] = self
@@ -234,10 +234,10 @@ impl PublicIdentity {
             .as_slice()
             .try_into()
             .map_err(|_| IdentityError::InvalidPublicKey)?;
-        
+
         VerifyingKey::from_bytes(&bytes).map_err(|_| IdentityError::InvalidPublicKey)
     }
-    
+
     /// Get the X25519 encryption public key
     pub fn encryption_public_key(&self) -> Result<X25519PublicKey, IdentityError> {
         let bytes: [u8; 32] = self
@@ -245,10 +245,10 @@ impl PublicIdentity {
             .as_slice()
             .try_into()
             .map_err(|_| IdentityError::InvalidPublicKey)?;
-        
+
         Ok(X25519PublicKey::from(bytes))
     }
-    
+
     /// Verify a signature on a message
     pub fn verify(&self, message: &[u8], signature: &Signature) -> Result<(), IdentityError> {
         let key = self.verifying_key()?;
@@ -269,12 +269,12 @@ impl DeviceId {
         let random_bytes: [u8; 16] = rng.gen();
         Self(bs58::encode(random_bytes).into_string())
     }
-    
+
     /// Create from string
     pub fn from_string(s: String) -> Self {
         Self(s)
     }
-    
+
     /// Get string representation
     pub fn as_str(&self) -> &str {
         &self.0
@@ -294,25 +294,25 @@ impl fmt::Display for DeviceId {
 pub struct DeviceKey {
     /// Unique device identifier
     pub device_id: DeviceId,
-    
+
     /// Device-specific signing key (public part)
     pub device_verifying_key: Vec<u8>,
-    
+
     /// Device-specific encryption key (public part)
     pub device_encryption_key: Vec<u8>,
-    
+
     /// Device name/label
     pub device_name: String,
-    
+
     /// When this device was added
     pub created_at: DateTime<Utc>,
-    
+
     /// Whether this device is revoked
     pub revoked: bool,
-    
+
     /// Revocation timestamp
     pub revoked_at: Option<DateTime<Utc>>,
-    
+
     /// Signature by root identity over device key
     pub root_signature: Vec<u8>,
 }
@@ -327,17 +327,17 @@ impl DeviceKey {
         root_identity: &Identity,
     ) -> Result<Self, IdentityError> {
         let created_at = Utc::now();
-        
+
         // Create message to sign (device_id + keys + timestamp)
         let mut message = Vec::new();
         message.extend_from_slice(device_id.as_str().as_bytes());
         message.extend_from_slice(device_verifying_key.as_bytes());
         message.extend_from_slice(device_encryption_key.as_bytes());
         message.extend_from_slice(created_at.to_rfc3339().as_bytes());
-        
+
         // Sign with root identity
         let signature = root_identity.sign(&message);
-        
+
         Ok(Self {
             device_id,
             device_verifying_key: device_verifying_key.to_bytes().to_vec(),
@@ -349,7 +349,7 @@ impl DeviceKey {
             root_signature: signature.to_bytes().to_vec(),
         })
     }
-    
+
     /// Verify device key signature against root identity
     pub fn verify_signature(&self, root_public: &PublicIdentity) -> Result<(), IdentityError> {
         // Reconstruct message
@@ -358,7 +358,7 @@ impl DeviceKey {
         message.extend_from_slice(&self.device_verifying_key);
         message.extend_from_slice(&self.device_encryption_key);
         message.extend_from_slice(self.created_at.to_rfc3339().as_bytes());
-        
+
         // Parse signature
         let sig_bytes: [u8; 64] = self
             .root_signature
@@ -366,19 +366,19 @@ impl DeviceKey {
             .try_into()
             .map_err(|_| IdentityError::InvalidDeviceSignature)?;
         let signature = Signature::from_bytes(&sig_bytes);
-        
+
         // Verify
         root_public.verify(&message, &signature)?;
-        
+
         Ok(())
     }
-    
+
     /// Mark device as revoked
     pub fn revoke(&mut self) {
         self.revoked = true;
         self.revoked_at = Some(Utc::now());
     }
-    
+
     /// Check if device is revoked
     pub fn is_revoked(&self) -> bool {
         self.revoked
@@ -401,24 +401,24 @@ impl IdentityRegistry {
             known_peer_ids: HashSet::new(),
         }
     }
-    
+
     /// Register a new identity
     pub fn register(&mut self, peer_id: &PeerId) -> Result<(), IdentityError> {
         let peer_id_str = peer_id.as_str().to_string();
-        
+
         if self.known_peer_ids.contains(&peer_id_str) {
             return Err(IdentityError::DuplicatePeerId);
         }
-        
+
         self.known_peer_ids.insert(peer_id_str);
         Ok(())
     }
-    
+
     /// Check if peer ID is already registered
     pub fn is_registered(&self, peer_id: &PeerId) -> bool {
         self.known_peer_ids.contains(peer_id.as_str())
     }
-    
+
     /// Get all registered peer IDs
     pub fn all_registered(&self) -> Vec<PeerId> {
         self.known_peer_ids
@@ -426,7 +426,7 @@ impl IdentityRegistry {
             .map(|s| PeerId::from_string(s.clone()))
             .collect()
     }
-    
+
     /// Verify uniqueness of an identity against registry
     pub fn verify_unique(&self, identity: &Identity) -> Result<(), IdentityError> {
         if self.is_registered(identity.peer_id()) {
@@ -449,7 +449,7 @@ impl Default for IdentityRegistry {
 pub struct RootIdentity {
     /// The root identity
     root: Identity,
-    
+
     /// List of device keys
     devices: Vec<DeviceKey>,
 }
@@ -462,28 +462,28 @@ impl RootIdentity {
             devices: Vec::new(),
         })
     }
-    
+
     /// Create a new root identity with uniqueness verification
     pub fn new_with_verification(registry: &mut IdentityRegistry) -> Result<Self, IdentityError> {
         let root = Identity::generate()?;
-        
+
         // Verify uniqueness before registering
         registry.verify_unique(&root)?;
-        
+
         // Register the new identity
         registry.register(root.peer_id())?;
-        
+
         Ok(Self {
             root,
             devices: Vec::new(),
         })
     }
-    
+
     /// Get the root identity
     pub fn root(&self) -> &Identity {
         &self.root
     }
-    
+
     /// Add a new device
     pub fn add_device(
         &mut self,
@@ -491,7 +491,7 @@ impl RootIdentity {
         device_name: String,
     ) -> Result<DeviceId, IdentityError> {
         let device_id = DeviceId::generate();
-        
+
         let device_key = DeviceKey::new(
             device_id.clone(),
             device_identity.verifying_key().clone(),
@@ -499,12 +499,12 @@ impl RootIdentity {
             device_name,
             &self.root,
         )?;
-        
+
         self.devices.push(device_key);
-        
+
         Ok(device_id)
     }
-    
+
     /// Revoke a device
     pub fn revoke_device(&mut self, device_id: &DeviceId) -> Result<(), IdentityError> {
         let device = self
@@ -512,21 +512,21 @@ impl RootIdentity {
             .iter_mut()
             .find(|d| &d.device_id == device_id)
             .ok_or_else(|| IdentityError::DeviceNotFound(device_id.to_string()))?;
-        
+
         device.revoke();
         Ok(())
     }
-    
+
     /// Get all devices
     pub fn devices(&self) -> &[DeviceKey] {
         &self.devices
     }
-    
+
     /// Get active (non-revoked) devices
     pub fn active_devices(&self) -> Vec<&DeviceKey> {
         self.devices.iter().filter(|d| !d.is_revoked()).collect()
     }
-    
+
     /// Check if device is valid
     pub fn is_device_valid(&self, device_id: &DeviceId) -> bool {
         self.devices
@@ -546,171 +546,179 @@ impl Default for RootIdentity {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_identity_generation() {
         let identity = Identity::generate().unwrap();
         assert!(!identity.peer_id().as_str().is_empty());
     }
-    
+
     #[test]
     fn test_signing_and_verification() {
         let identity = Identity::generate().unwrap();
         let message = b"Hello, Otter!";
-        
+
         let signature = identity.sign(message);
-        
+
         let public_identity = PublicIdentity::from_identity(&identity);
         assert!(public_identity.verify(message, &signature).is_ok());
     }
-    
+
     #[test]
     fn test_identity_export_import() {
         let identity = Identity::generate().unwrap();
         let json = identity.to_json().unwrap();
-        
+
         let restored = Identity::from_json(&json).unwrap();
-        
+
         assert_eq!(identity.peer_id(), restored.peer_id());
-        
+
         // Verify they can sign and verify the same way
         let message = b"test message";
         let sig = identity.sign(message);
         let pub_restored = PublicIdentity::from_identity(&restored);
         assert!(pub_restored.verify(message, &sig).is_ok());
     }
-    
+
     #[test]
     fn test_peer_id_uniqueness() {
         let id1 = Identity::generate().unwrap();
         let id2 = Identity::generate().unwrap();
-        
+
         assert_ne!(id1.peer_id(), id2.peer_id());
     }
-    
+
     #[test]
     fn test_device_key_creation() {
         let root = Identity::generate().unwrap();
         let device = Identity::generate().unwrap();
-        
+
         let device_key = DeviceKey::new(
             DeviceId::generate(),
             device.verifying_key().clone(),
             device.encryption_public_key().clone(),
             "My Device".to_string(),
             &root,
-        ).unwrap();
-        
+        )
+        .unwrap();
+
         assert!(!device_key.is_revoked());
     }
-    
+
     #[test]
     fn test_device_key_verification() {
         let root = Identity::generate().unwrap();
         let device = Identity::generate().unwrap();
         let root_public = PublicIdentity::from_identity(&root);
-        
+
         let device_key = DeviceKey::new(
             DeviceId::generate(),
             device.verifying_key().clone(),
             device.encryption_public_key().clone(),
             "Test Device".to_string(),
             &root,
-        ).unwrap();
-        
+        )
+        .unwrap();
+
         assert!(device_key.verify_signature(&root_public).is_ok());
     }
-    
+
     #[test]
     fn test_root_identity_multi_device() {
         let mut root_identity = RootIdentity::new().unwrap();
-        
+
         // Add first device
         let device1 = Identity::generate().unwrap();
-        let device1_id = root_identity.add_device(&device1, "Device 1".to_string()).unwrap();
-        
+        let device1_id = root_identity
+            .add_device(&device1, "Device 1".to_string())
+            .unwrap();
+
         // Add second device
         let device2 = Identity::generate().unwrap();
-        let device2_id = root_identity.add_device(&device2, "Device 2".to_string()).unwrap();
-        
+        let device2_id = root_identity
+            .add_device(&device2, "Device 2".to_string())
+            .unwrap();
+
         assert_eq!(root_identity.devices().len(), 2);
         assert_eq!(root_identity.active_devices().len(), 2);
-        
+
         // Revoke first device
         root_identity.revoke_device(&device1_id).unwrap();
-        
+
         assert_eq!(root_identity.active_devices().len(), 1);
         assert!(!root_identity.is_device_valid(&device1_id));
         assert!(root_identity.is_device_valid(&device2_id));
     }
-    
+
     #[test]
     fn test_device_revocation() {
         let mut root_identity = RootIdentity::new().unwrap();
         let device = Identity::generate().unwrap();
-        
-        let device_id = root_identity.add_device(&device, "Test Device".to_string()).unwrap();
+
+        let device_id = root_identity
+            .add_device(&device, "Test Device".to_string())
+            .unwrap();
         assert!(root_identity.is_device_valid(&device_id));
-        
+
         root_identity.revoke_device(&device_id).unwrap();
         assert!(!root_identity.is_device_valid(&device_id));
     }
-    
+
     #[test]
     fn test_identity_registry() {
         let mut registry = IdentityRegistry::new();
         let identity1 = Identity::generate().unwrap();
-        
+
         // First registration should succeed
         assert!(registry.register(identity1.peer_id()).is_ok());
-        
+
         // Duplicate registration should fail
         assert!(registry.register(identity1.peer_id()).is_err());
-        
+
         // Check is_registered works
         assert!(registry.is_registered(identity1.peer_id()));
     }
-    
+
     #[test]
     fn test_uniqueness_verification() {
         let mut registry = IdentityRegistry::new();
         let identity1 = Identity::generate().unwrap();
-        
+
         // Verify uniqueness before registration
         assert!(registry.verify_unique(&identity1).is_ok());
-        
+
         // Register it
         registry.register(identity1.peer_id()).unwrap();
-        
+
         // Now it should fail uniqueness check
         assert!(registry.verify_unique(&identity1).is_err());
     }
-    
+
     #[test]
     fn test_root_identity_with_verification() {
         let mut registry = IdentityRegistry::new();
-        
+
         // Create first root with verification
         let root1 = RootIdentity::new_with_verification(&mut registry).unwrap();
         assert!(registry.is_registered(root1.root().peer_id()));
-        
+
         // Creating duplicate should fail
         let root2 = Identity::generate().unwrap();
         registry.register(root2.peer_id()).unwrap();
-        
+
         // Try to create same one again should fail
         assert!(registry.verify_unique(&root2).is_err());
     }
-    
+
     #[test]
     fn test_all_registered_peer_ids() {
         let mut registry = IdentityRegistry::new();
         let id1 = Identity::generate().unwrap();
         let id2 = Identity::generate().unwrap();
-        
+
         registry.register(id1.peer_id()).unwrap();
         registry.register(id2.peer_id()).unwrap();
-        
+
         let registered = registry.all_registered();
         assert_eq!(registered.len(), 2);
     }

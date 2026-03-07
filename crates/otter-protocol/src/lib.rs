@@ -61,22 +61,22 @@ pub enum Capability {
 pub struct Handshake {
     /// Protocol version
     pub version: u32,
-    
+
     /// Protocol identifier
     pub protocol_id: String,
-    
+
     /// Sender's public identity
     pub identity: PublicIdentity,
-    
+
     /// List of supported capabilities
     pub capabilities: Vec<Capability>,
-    
+
     /// Optional metadata (client info, etc.)
     pub metadata: HashMap<String, String>,
-    
+
     /// Timestamp
     pub timestamp: DateTime<Utc>,
-    
+
     /// Signature over the handshake (excluding this field)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub signature: Option<Vec<u8>>,
@@ -95,18 +95,18 @@ impl Handshake {
             signature: None,
         }
     }
-    
+
     /// Add metadata to the handshake
     pub fn with_metadata(mut self, key: String, value: String) -> Self {
         self.metadata.insert(key, value);
         self
     }
-    
+
     /// Check if a capability is supported
     pub fn supports(&self, capability: &Capability) -> bool {
         self.capabilities.contains(capability)
     }
-    
+
     /// Verify protocol compatibility
     pub fn is_compatible(&self) -> Result<(), ProtocolError> {
         if self.version != PROTOCOL_VERSION {
@@ -115,23 +115,23 @@ impl Handshake {
                 actual: self.version,
             });
         }
-        
+
         if self.protocol_id != PROTOCOL_ID {
             return Err(ProtocolError::InvalidHandshake(
                 "Protocol ID mismatch".to_string(),
             ));
         }
-        
+
         // E2E encryption is mandatory
         if !self.supports(&Capability::E2EEncryption) {
             return Err(ProtocolError::UnsupportedCapability(
                 "E2E encryption is required".to_string(),
             ));
         }
-        
+
         Ok(())
     }
-    
+
     /// Serialize to bytes using MessagePack
     pub fn to_bytes(&self) -> Result<Vec<u8>, ProtocolError> {
         let mut buf = Vec::new();
@@ -140,7 +140,7 @@ impl Handshake {
             .map_err(|e| ProtocolError::SerializationError(format!("MessagePack encode: {}", e)))?;
         Ok(buf)
     }
-    
+
     /// Deserialize from bytes using MessagePack
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, ProtocolError> {
         rmp_serde::from_slice(bytes)
@@ -153,13 +153,13 @@ impl Handshake {
 pub struct HandshakeResponse {
     /// Accepted capabilities (subset of requested)
     pub accepted_capabilities: Vec<Capability>,
-    
+
     /// Response status
     pub accepted: bool,
-    
+
     /// Optional reason for rejection
     pub reason: Option<String>,
-    
+
     /// Timestamp
     pub timestamp: DateTime<Utc>,
 }
@@ -174,7 +174,7 @@ impl HandshakeResponse {
             timestamp: Utc::now(),
         }
     }
-    
+
     /// Create a rejection response
     pub fn reject(reason: String) -> Self {
         Self {
@@ -184,7 +184,7 @@ impl HandshakeResponse {
             timestamp: Utc::now(),
         }
     }
-    
+
     /// Serialize to bytes using MessagePack
     pub fn to_bytes(&self) -> Result<Vec<u8>, ProtocolError> {
         let mut buf = Vec::new();
@@ -193,7 +193,7 @@ impl HandshakeResponse {
             .map_err(|e| ProtocolError::SerializationError(format!("MessagePack encode: {}", e)))?;
         Ok(buf)
     }
-    
+
     /// Deserialize from bytes using MessagePack
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, ProtocolError> {
         rmp_serde::from_slice(bytes)
@@ -206,43 +206,43 @@ impl HandshakeResponse {
 pub struct ProtocolMessage {
     /// Protocol version
     pub version: u32,
-    
+
     /// Message payload
     pub payload: MessagePayload,
-    
+
     /// Message ID for tracking
     pub message_id: String,
-    
+
     /// Timestamp
     pub timestamp: DateTime<Utc>,
 }
 
 /// Message payload types
-/// 
+///
 /// NOTE: Uses default externally-tagged enum format for MessagePack compatibility.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum MessagePayload {
     /// Handshake initiation
     Handshake(Handshake),
-    
+
     /// Handshake response
     HandshakeResponse(HandshakeResponse),
-    
+
     /// Text message
     Text { content: Vec<u8> },
-    
+
     /// Binary data
     Binary { data: Vec<u8> },
-    
+
     /// Keep-alive ping
     Ping,
-    
+
     /// Pong response
     Pong,
-    
+
     /// Capability negotiation
     CapabilityRequest { capabilities: Vec<Capability> },
-    
+
     /// Protocol upgrade request
     ProtocolUpgrade { target_version: u32 },
 }
@@ -257,7 +257,7 @@ impl ProtocolMessage {
             timestamp: Utc::now(),
         }
     }
-    
+
     /// Serialize to bytes using MessagePack
     pub fn to_bytes(&self) -> Result<Vec<u8>, ProtocolError> {
         let mut buf = Vec::new();
@@ -266,7 +266,7 @@ impl ProtocolMessage {
             .map_err(|e| ProtocolError::SerializationError(format!("MessagePack encode: {}", e)))?;
         Ok(buf)
     }
-    
+
     /// Deserialize from bytes using MessagePack
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, ProtocolError> {
         rmp_serde::from_slice(bytes)
@@ -279,17 +279,14 @@ pub struct CapabilityMatcher;
 
 impl CapabilityMatcher {
     /// Find common capabilities between two peers
-    pub fn match_capabilities(
-        local: &[Capability],
-        remote: &[Capability],
-    ) -> Vec<Capability> {
+    pub fn match_capabilities(local: &[Capability], remote: &[Capability]) -> Vec<Capability> {
         local
             .iter()
             .filter(|cap| remote.contains(cap))
             .cloned()
             .collect()
     }
-    
+
     /// Check if a required capability is supported
     pub fn has_required(capabilities: &[Capability], required: &Capability) -> bool {
         capabilities.contains(required)
@@ -297,7 +294,7 @@ impl CapabilityMatcher {
 }
 
 /// WebRTC signaling messages for voice/video setup
-/// 
+///
 /// These messages are transmitted over the encrypted messaging channel
 /// to establish WebRTC connections between peers.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -311,7 +308,7 @@ pub enum SignalingMessage {
         /// Session ID for tracking
         session_id: String,
     },
-    
+
     /// Answer to a WebRTC offer
     Answer {
         /// SDP answer
@@ -319,7 +316,7 @@ pub enum SignalingMessage {
         /// Session ID matching the offer
         session_id: String,
     },
-    
+
     /// ICE candidate for NAT traversal
     IceCandidate {
         /// ICE candidate in SDP format
@@ -331,13 +328,13 @@ pub enum SignalingMessage {
         /// Session ID
         session_id: String,
     },
-    
+
     /// Signal that ICE candidate gathering is complete
     IceComplete {
         /// Session ID
         session_id: String,
     },
-    
+
     /// Request to end the session
     Hangup {
         /// Session ID
@@ -345,13 +342,13 @@ pub enum SignalingMessage {
         /// Reason for hangup
         reason: Option<String>,
     },
-    
+
     /// Acknowledgment of received signaling message
     Ack {
         /// ID of the message being acknowledged
         ack_message_id: String,
     },
-    
+
     /// Request retransmission of a message
     Retransmit {
         /// ID of the message to retransmit
@@ -379,16 +376,16 @@ pub enum MediaType {
 pub struct SignalingProtocolMessage {
     /// Unique message ID
     pub message_id: String,
-    
+
     /// Signaling payload
     pub payload: SignalingMessage,
-    
+
     /// Timestamp
     pub timestamp: DateTime<Utc>,
-    
+
     /// Sequence number for ordering
     pub sequence: u64,
-    
+
     /// Requires acknowledgment
     pub requires_ack: bool,
 }
@@ -404,19 +401,17 @@ impl SignalingProtocolMessage {
             requires_ack,
         }
     }
-    
+
     /// Serialize to JSON
     pub fn to_json(&self) -> Result<String, ProtocolError> {
-        serde_json::to_string(self)
-            .map_err(|e| ProtocolError::SerializationError(e.to_string()))
+        serde_json::to_string(self).map_err(|e| ProtocolError::SerializationError(e.to_string()))
     }
-    
+
     /// Deserialize from JSON
     pub fn from_json(json: &str) -> Result<Self, ProtocolError> {
-        serde_json::from_str(json)
-            .map_err(|e| ProtocolError::SerializationError(e.to_string()))
+        serde_json::from_str(json).map_err(|e| ProtocolError::SerializationError(e.to_string()))
     }
-    
+
     /// Serialize to bytes using MessagePack
     pub fn to_bytes(&self) -> Result<Vec<u8>, ProtocolError> {
         let mut buf = Vec::new();
@@ -425,7 +420,7 @@ impl SignalingProtocolMessage {
             .map_err(|e| ProtocolError::SerializationError(format!("MessagePack encode: {}", e)))?;
         Ok(buf)
     }
-    
+
     /// Deserialize from bytes using MessagePack
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, ProtocolError> {
         rmp_serde::from_slice(bytes)
@@ -437,28 +432,28 @@ impl SignalingProtocolMessage {
 pub struct SignalingSession {
     /// Session ID
     pub session_id: String,
-    
+
     /// Peer ID we're signaling with
     pub peer_id: String,
-    
+
     /// Local media type
     pub media_type: MediaType,
-    
+
     /// Whether we initiated the session
     pub is_initiator: bool,
-    
+
     /// Sequence counter for messages
     pub sequence: u64,
-    
+
     /// Pending acks (message_id -> send_time)
     pub pending_acks: HashMap<String, DateTime<Utc>>,
-    
+
     /// Received ICE candidates
     pub received_candidates: Vec<String>,
-    
+
     /// Session start time
     pub started_at: DateTime<Utc>,
-    
+
     /// Session state
     pub state: SignalingState,
 }
@@ -497,7 +492,7 @@ impl SignalingSession {
             state: SignalingState::Idle,
         }
     }
-    
+
     /// Create a new signaling session as responder
     pub fn new_responder(session_id: String, peer_id: String, media_type: MediaType) -> Self {
         Self {
@@ -512,36 +507,39 @@ impl SignalingSession {
             state: SignalingState::AnswerPending,
         }
     }
-    
+
     /// Create the next signaling message
-    pub fn create_message(&mut self, payload: SignalingMessage, requires_ack: bool) -> SignalingProtocolMessage {
+    pub fn create_message(
+        &mut self,
+        payload: SignalingMessage,
+        requires_ack: bool,
+    ) -> SignalingProtocolMessage {
         let msg = SignalingProtocolMessage::new(payload, self.sequence, requires_ack);
         self.sequence += 1;
-        
+
         if requires_ack {
-            self.pending_acks.insert(msg.message_id.clone(), msg.timestamp);
+            self.pending_acks
+                .insert(msg.message_id.clone(), msg.timestamp);
         }
-        
+
         msg
     }
-    
+
     /// Handle received acknowledgment
     pub fn handle_ack(&mut self, message_id: &str) {
         self.pending_acks.remove(message_id);
     }
-    
+
     /// Get messages that need retransmission (no ack after timeout)
     pub fn get_retransmit_needed(&self, timeout_seconds: i64) -> Vec<String> {
         let now = Utc::now();
         self.pending_acks
             .iter()
-            .filter(|(_, sent_at)| {
-                (now - **sent_at).num_seconds() > timeout_seconds
-            })
+            .filter(|(_, sent_at)| (now - **sent_at).num_seconds() > timeout_seconds)
             .map(|(msg_id, _)| msg_id.clone())
             .collect()
     }
-    
+
     /// Update session state
     pub fn set_state(&mut self, state: SignalingState) {
         self.state = state;
@@ -552,44 +550,44 @@ impl SignalingSession {
 mod tests {
     use super::*;
     use otter_identity::Identity;
-    
+
     #[test]
     fn test_handshake_creation() {
         let identity = Identity::generate().unwrap();
         let public = PublicIdentity::from_identity(&identity);
-        
+
         let handshake = Handshake::new(
             public,
             vec![Capability::TextMessaging, Capability::E2EEncryption],
         );
-        
+
         assert_eq!(handshake.version, PROTOCOL_VERSION);
         assert!(handshake.supports(&Capability::TextMessaging));
     }
-    
+
     #[test]
     fn test_handshake_compatibility() {
         let identity = Identity::generate().unwrap();
         let public = PublicIdentity::from_identity(&identity);
-        
+
         let handshake = Handshake::new(
             public,
             vec![Capability::E2EEncryption, Capability::TextMessaging],
         );
-        
+
         assert!(handshake.is_compatible().is_ok());
     }
-    
+
     #[test]
     fn test_handshake_missing_e2e() {
         let identity = Identity::generate().unwrap();
         let public = PublicIdentity::from_identity(&identity);
-        
+
         let handshake = Handshake::new(public, vec![Capability::TextMessaging]);
-        
+
         assert!(handshake.is_compatible().is_err());
     }
-    
+
     #[test]
     fn test_capability_matching() {
         let local = vec![
@@ -597,55 +595,58 @@ mod tests {
             Capability::VoiceCall,
             Capability::E2EEncryption,
         ];
-        
+
         let remote = vec![
             Capability::TextMessaging,
             Capability::E2EEncryption,
             Capability::FileTransfer,
         ];
-        
+
         let common = CapabilityMatcher::match_capabilities(&local, &remote);
-        
+
         assert_eq!(common.len(), 2);
         assert!(common.contains(&Capability::TextMessaging));
         assert!(common.contains(&Capability::E2EEncryption));
     }
-    
+
     #[test]
     fn test_handshake_serialization() {
         let identity = Identity::generate().unwrap();
         let public = PublicIdentity::from_identity(&identity);
-        
+
         let handshake = Handshake::new(
             public,
             vec![Capability::E2EEncryption, Capability::TextMessaging],
         );
-        
+
         // Test JSON serialization instead (more reliable for complex types)
         let json = serde_json::to_string(&handshake).unwrap();
         let deserialized: Handshake = serde_json::from_str(&json).unwrap();
-        
+
         assert_eq!(handshake.version, deserialized.version);
-        assert_eq!(handshake.capabilities.len(), deserialized.capabilities.len());
+        assert_eq!(
+            handshake.capabilities.len(),
+            deserialized.capabilities.len()
+        );
     }
-    
+
     #[test]
     fn test_signaling_session_creation() {
         let session_id = "test-session".to_string();
         let peer_id = "peer1".to_string();
-        
+
         let session = SignalingSession::new_initiator(
             session_id.clone(),
             peer_id.clone(),
             MediaType::AudioOnly,
         );
-        
+
         assert_eq!(session.session_id, session_id);
         assert_eq!(session.peer_id, peer_id);
         assert!(session.is_initiator);
         assert_eq!(session.state, SignalingState::Idle);
     }
-    
+
     #[test]
     fn test_signaling_message_serialization() {
         let offer = SignalingMessage::Offer {
@@ -653,18 +654,18 @@ mod tests {
             media_type: MediaType::AudioVideo,
             session_id: "session1".to_string(),
         };
-        
+
         let msg = SignalingProtocolMessage::new(offer, 0, true);
-        
+
         // Test JSON serialization
         let json = msg.to_json().unwrap();
         let deserialized = SignalingProtocolMessage::from_json(&json).unwrap();
-        
+
         assert_eq!(msg.message_id, deserialized.message_id);
         assert_eq!(msg.sequence, deserialized.sequence);
         assert!(deserialized.requires_ack);
     }
-    
+
     #[test]
     fn test_signaling_ack_handling() {
         let mut session = SignalingSession::new_initiator(
@@ -672,16 +673,16 @@ mod tests {
             "peer1".to_string(),
             MediaType::AudioOnly,
         );
-        
+
         let offer = SignalingMessage::Offer {
             sdp: "test".to_string(),
             media_type: MediaType::AudioOnly,
             session_id: "session1".to_string(),
         };
-        
+
         let msg = session.create_message(offer, true);
         assert_eq!(session.pending_acks.len(), 1);
-        
+
         session.handle_ack(&msg.message_id);
         assert_eq!(session.pending_acks.len(), 0);
     }
